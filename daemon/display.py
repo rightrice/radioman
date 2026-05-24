@@ -22,6 +22,14 @@ def _load_epd(model: str):
         return None
 
 
+def _init_epd(epd) -> None:
+    # V2/V3 take a mode constant (FULL_UPDATE); V4 takes no arguments.
+    if hasattr(epd, "FULL_UPDATE"):
+        epd.init(epd.FULL_UPDATE)
+    else:
+        epd.init()
+
+
 class Display:
     def __init__(self, model: str = "epd2in13_V2", rotate: int = 180):
         self._model      = model
@@ -42,10 +50,7 @@ class Display:
 
         self._epd = _load_epd(self._model)
         if self._epd:
-            try:
-                self._epd.init(self._epd.FULL_UPDATE)
-            except TypeError:
-                self._epd.init()
+            _init_epd(self._epd)
             self._epd.Clear(0xFF)
             log.info("E-ink display initialised (%s)", self._model)
         else:
@@ -60,8 +65,6 @@ class Display:
         candidates = [
             "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
             "/usr/share/fonts/noto/NotoSans-Regular.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
@@ -152,10 +155,7 @@ class Display:
                 img = self._make_frame(personality, stats, battery)
                 if self._epd:
                     if self._update_cnt > 0 and self._update_cnt % 20 == 0:
-                        try:
-                            self._epd.init(self._epd.FULL_UPDATE)
-                        except TypeError:
-                            self._epd.init()
+                        _init_epd(self._epd)
                     buf = self._epd.getbuffer(img)
                     self._epd.display(buf)
                     self._update_cnt += 1
@@ -175,10 +175,7 @@ class Display:
     def clear(self):
         if self._epd:
             try:
-                try:
-                    self._epd.init(self._epd.FULL_UPDATE)
-                except TypeError:
-                    self._epd.init()
+                _init_epd(self._epd)
                 self._epd.Clear(0xFF)
             except Exception:
                 pass

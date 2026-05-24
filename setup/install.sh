@@ -122,8 +122,38 @@ log "Installing PiSugar 2 server..."
 if ! command -v pisugar-server &>/dev/null; then
   curl -s https://cdn.pisugar.com/release/pisugar-power-manager.sh | bash || \
     warn "PiSugar install failed — battery will use direct I2C fallback"
+
+  # Stop immediately — never let it run with a blank config.
+  # pisugar-server with no model set sends unrecognized I2C commands that can
+  # corrupt the IP5312 chip state and leave the bus unresponsive.
+  systemctl stop pisugar-server 2>/dev/null || true
+
+  # Set model non-interactively via debconf then write safe defaults to config.
+  echo "pisugar-server pisugar-server/model select PiSugar 2 (2-LEDs)" \
+    | debconf-set-selections
+  DEBIAN_FRONTEND=noninteractive dpkg-reconfigure pisugar-server 2>/dev/null || \
+    warn "dpkg-reconfigure pisugar-server failed — run manually: sudo dpkg-reconfigure pisugar-server"
+
+  # Write auto_power_on so the Pi stays up when USB is disconnected.
+  PISUGAR_CFG="/etc/pisugar-server/config.json"
+  if [ -f "$PISUGAR_CFG" ]; then
+    python3 - "$PISUGAR_CFG" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    c = json.load(f)
+c["auto_power_on"] = True
+with open(path, "w") as f:
+    json.dump(c, f, indent=2)
+PYEOF
+    log "PiSugar auto_power_on enabled"
+  fi
+
+  systemctl enable pisugar-server
+  systemctl start pisugar-server
+  log "PiSugar server configured and started (model: PiSugar 2 (2-LEDs))"
 else
-  info "PiSugar server already installed"
+  info "PiSugar server already installed — skipping configuration"
 fi
 
 # ── Waveshare e-ink library ────────────────────────────────────────────────────
@@ -138,24 +168,29 @@ fi
 # ── Enable SPI, I2C, and USB gadget mode ──────────────────────────────────────
 log "Configuring boot options (SPI, I2C, USB gadget)..."
 
-# Use raspi-config to enable SPI and I2C — it knows the right config file
-# regardless of Pi OS version (Bullseye /boot vs Bookworm /boot/firmware)
-if command -v raspi-config &>/dev/null; then
-  raspi-config nonint do_spi 0 && log "SPI enabled via raspi-config" || warn "SPI enable failed"
-  raspi-config nonint do_i2c 0 && log "I2C enabled via raspi-config" || warn "I2C enable failed"
+CONFIG_FILE="/boot/firmware/config.txt"
+[ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
+
+# Enable SPI — change dtparam=spi=off → on, or append if absent
+if grep -q "^dtparam=spi" "$CONFIG_FILE"; then
+  sed -i 's/^dtparam=spi=.*/dtparam=spi=on/' "$CONFIG_FILE"
 else
-  warn "raspi-config not found — enabling SPI/I2C manually..."
-  CONFIG_FILE="/boot/firmware/config.txt"
-  [ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
-  grep -q "^dtparam=spi=on"     "$CONFIG_FILE" || echo "dtparam=spi=on"     >> "$CONFIG_FILE"
-  grep -q "^dtparam=i2c_arm=on" "$CONFIG_FILE" || echo "dtparam=i2c_arm=on" >> "$CONFIG_FILE"
+  echo "dtparam=spi=on" >> "$CONFIG_FILE"
 fi
+
+# Enable I2C — same pattern
+if grep -q "^dtparam=i2c_arm" "$CONFIG_FILE"; then
+  sed -i 's/^dtparam=i2c_arm=.*/dtparam=i2c_arm=on/' "$CONFIG_FILE"
+else
+  echo "dtparam=i2c_arm=on" >> "$CONFIG_FILE"
+fi
+
+log "SPI and I2C enabled in $CONFIG_FILE"
 
 # USB gadget ethernet (SSH over USB data cable)
 CMDLINE_FILE="/boot/firmware/cmdline.txt"
 [ -f "/boot/cmdline.txt" ] && CMDLINE_FILE="/boot/cmdline.txt"
-CONFIG_FILE="/boot/firmware/config.txt"
-[ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
+
 grep -q "^dtoverlay=dwc2" "$CONFIG_FILE" || echo "dtoverlay=dwc2" >> "$CONFIG_FILE"
 
 if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
@@ -170,6 +205,7 @@ mkdir -p "$RADIOMAN_DIR" "$CAPTURES_DIR" "$WORDLISTS_DIR"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 log "Copying source files from $SCRIPT_DIR..."
 cp "$SCRIPT_DIR/daemon/"*.py "$RADIOMAN_DIR/"
+rm -rf "$RADIOMAN_DIR/web"
 cp -r "$SCRIPT_DIR/web"     "$RADIOMAN_DIR/web"
 
 # Only create radioman.conf from the example if one doesn't exist yet.

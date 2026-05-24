@@ -1,7 +1,7 @@
 [Unit]
 Description=Radioman — Wi-Fi audit daemon
-After=network.target multi-user.target
-Wants=network.target
+After=network.target multi-user.target pisugar-server.service
+Wants=network.target pisugar-server.service
 
 [Service]
 Type=simple

@@ -78,7 +78,7 @@ class Radioman:
         self.xplt_sync   = XpltSync(xplt_cfg, self._db_path)
         self.personality = PersonalityEngine()
         self.display     = Display(
-            model=display_cfg.get("model", "epd2in13_V2"),
+            model=display_cfg.get("model", "epd2in13_V4"),
             rotate=int(display_cfg.get("rotate", 180)),
         )
         self.scanner     = NetworkScanner(iface=self._iface)
@@ -158,8 +158,9 @@ class Radioman:
                     battery_pct=batt.get("percent", -1),
                     networks_seen=stats.get("networks", 0),
                 )
-                if batt.get("percent", 100) < 15:
-                    self.personality.on_low_battery(batt["percent"])
+                batt_pct = batt.get("percent", -1)
+                if 0 <= batt_pct < 15:
+                    self.personality.on_low_battery(batt_pct)
             except Exception as e:
                 log.error("Personality loop error: %s", e)
             time.sleep(self._pers_period)
