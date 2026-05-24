@@ -50,9 +50,7 @@ apt-get install -y -qq \
   swig \
   liblgpio-dev \
   fonts-dejavu-core \
-  fonts-noto \
-  fonts-noto-cjk \
-  fonts-noto-extra
+  fonts-noto
 
 # ── hcxtools (PMKID extraction) ────────────────────────────────────────────────
 log "Installing hcxtools..."
