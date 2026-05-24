@@ -53,38 +53,46 @@ apt-get install -y -qq \
   fonts-noto
 
 # ── hcxtools (PMKID extraction) ────────────────────────────────────────────────
-log "Installing hcxtools..."
-if apt-get install -y -qq hcxtools 2>/dev/null; then
-  log "hcxtools installed via apt"
+if command -v hcxpcapngtool &>/dev/null; then
+  info "hcxtools already installed"
 else
-  warn "hcxtools not in apt — building from source..."
-  apt-get install -y -qq build-essential pkg-config
-  TMP=$(mktemp -d)
-  git clone --depth=1 -q https://github.com/ZerBea/hcxtools "$TMP/hcxtools"
-  make -C "$TMP/hcxtools" -j2 --quiet
-  make -C "$TMP/hcxtools" install --quiet
-  rm -rf "$TMP"
-  log "hcxtools built and installed"
+  log "Installing hcxtools..."
+  if apt-get install -y -qq hcxtools 2>/dev/null; then
+    log "hcxtools installed via apt"
+  else
+    warn "hcxtools not in apt — building from source..."
+    apt-get install -y -qq build-essential pkg-config
+    TMP=$(mktemp -d)
+    git clone --depth=1 -q https://github.com/ZerBea/hcxtools "$TMP/hcxtools"
+    make -C "$TMP/hcxtools" -j2 --quiet
+    make -C "$TMP/hcxtools" install --quiet
+    rm -rf "$TMP"
+    log "hcxtools built and installed"
+  fi
 fi
 
 # ── hashcat (PMKID + EAPOL cracking) ──────────────────────────────────────────
-log "Installing hashcat..."
-if apt-get install -y -qq hashcat 2>/dev/null; then
-  log "hashcat installed via apt"
+if command -v hashcat &>/dev/null; then
+  info "hashcat already installed"
 else
-  warn "hashcat not in apt — building from source..."
-  apt-get install -y -qq build-essential pkg-config libssl-dev
-  TMP=$(mktemp -d)
-  HC_VER=$(curl -s https://api.github.com/repos/hashcat/hashcat/releases/latest \
-           | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
-  wget -q "https://github.com/hashcat/hashcat/releases/download/v${HC_VER}/hashcat-${HC_VER}.tar.gz" \
-    -O "$TMP/hashcat.tar.gz"
-  tar -xzf "$TMP/hashcat.tar.gz" -C "$TMP"
-  make -C "$TMP/hashcat-${HC_VER}" -j2 --quiet
-  cp "$TMP/hashcat-${HC_VER}/hashcat" /usr/local/bin/hashcat
-  cp -r "$TMP/hashcat-${HC_VER}/OpenCL" /usr/local/share/hashcat-opencl 2>/dev/null || true
-  rm -rf "$TMP"
-  log "hashcat built and installed"
+  log "Installing hashcat..."
+  if apt-get install -y -qq hashcat 2>/dev/null; then
+    log "hashcat installed via apt"
+  else
+    warn "hashcat not in apt — building from source..."
+    apt-get install -y -qq build-essential pkg-config libssl-dev
+    TMP=$(mktemp -d)
+    HC_VER=$(curl -s https://api.github.com/repos/hashcat/hashcat/releases/latest \
+             | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
+    wget -q "https://github.com/hashcat/hashcat/releases/download/v${HC_VER}/hashcat-${HC_VER}.tar.gz" \
+      -O "$TMP/hashcat.tar.gz"
+    tar -xzf "$TMP/hashcat.tar.gz" -C "$TMP"
+    make -C "$TMP/hashcat-${HC_VER}" -j2 --quiet
+    cp "$TMP/hashcat-${HC_VER}/hashcat" /usr/local/bin/hashcat
+    cp -r "$TMP/hashcat-${HC_VER}/OpenCL" /usr/local/share/hashcat-opencl 2>/dev/null || true
+    rm -rf "$TMP"
+    log "hashcat built and installed"
+  fi
 fi
 
 # ── bettercap ──────────────────────────────────────────────────────────────────
