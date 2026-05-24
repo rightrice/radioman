@@ -50,6 +50,7 @@ def create_app(state: dict) -> Flask:
             "personality": pers,
             "battery":     batt,
             "stats":       stats,
+            "scanning":    state["capture"].scanning,
             "crack_queue": {
                 "queued": cq.queue_size,
                 "active": cq.active_jobs,
@@ -186,6 +187,19 @@ def create_app(state: dict) -> Flask:
 
         _db.log_event(_db_path(), "info", f"Device paired with XPLT as '{device_name}'")
         return jsonify({"paired": True})
+
+    # ── Scan control ──────────────────────────────────────────────────────────
+    @app.route("/api/scan/start", methods=["POST"])
+    def scan_start():
+        state["capture"].start_scan()
+        _db.log_event(_db_path(), "info", "Scan started")
+        return jsonify({"scanning": True})
+
+    @app.route("/api/scan/stop", methods=["POST"])
+    def scan_stop():
+        state["capture"].stop_scan()
+        _db.log_event(_db_path(), "info", "Scan stopped")
+        return jsonify({"scanning": False})
 
     # ── bettercap pass-through commands ───────────────────────────────────────
     @app.route("/api/cmd", methods=["POST"])

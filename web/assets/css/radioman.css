@@ -470,6 +470,20 @@ body { background: #08111f; }
   border-color: rgba(94,225,200,0.3);
   color: var(--rm-teal);
 }
+.rm-btn-danger {
+  background: linear-gradient(135deg, rgba(248,113,113,0.15), rgba(251,113,133,0.15));
+  border-color: rgba(248,113,113,0.35);
+  color: var(--rm-red);
+}
+.rm-scan-status {
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-top: 0.4rem;
+}
+.rm-scan-on  { color: var(--rm-teal); }
+.rm-scan-off { color: var(--aap-muted, #64748b); }
 
 /* ── Ghost mascot ───────────────────────────────────────────── */
 .rm-mascot-wrap {

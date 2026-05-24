@@ -107,7 +107,7 @@ function renderView() {
 function renderMain(status, data, xplt = null) {
   const main = document.getElementById("rmMain");
   switch (currentView) {
-    case "overview":  main.innerHTML = viewOverview(status, xplt); attachXpltHandler(); break;
+    case "overview":  main.innerHTML = viewOverview(status, xplt); attachXpltHandler(); attachScanToggle(); break;
     case "networks":  main.innerHTML = viewNetworks(data || []); break;
     case "clients":   main.innerHTML = viewClients(data || []); break;
     case "captures":  main.innerHTML = viewCaptures(data || []); attachCrackHandlers(); break;
@@ -120,10 +120,11 @@ function renderMain(status, data, xplt = null) {
 
 // ── Overview ──────────────────────────────────────────────────────────────────
 function viewOverview(status, xplt) {
-  const p    = status.personality || {};
-  const b    = status.battery     || {};
-  const s    = status.stats       || {};
-  const cq   = status.crack_queue || {};
+  const p       = status.personality || {};
+  const b       = status.battery     || {};
+  const s       = status.stats       || {};
+  const cq      = status.crack_queue || {};
+  const scanning = status.scanning   ?? false;
 
   const pct  = b.percent ?? -1;
   const chrg = b.charging ? " <span class='rm-charging'>⚡ charging</span>" : "";
@@ -141,6 +142,16 @@ function viewOverview(status, xplt) {
           <span class="rm-hearts">${hearts}</span>
           <span class="rm-mono">${pct >= 0 ? pct + "%" : "—"}</span>
           ${chrg}
+        </div>
+        <div style="margin-top:0.75rem">
+          <button id="rmScanToggleBtn"
+            class="rm-btn ${scanning ? "rm-btn-danger" : "rm-btn-primary"}"
+            style="width:100%">
+            ${scanning ? "⏹ Stop Scanning" : "▶ Start Scanning"}
+          </button>
+          <div class="rm-scan-status ${scanning ? "rm-scan-on" : "rm-scan-off"}">
+            ${scanning ? "● scanning" : "○ idle"}
+          </div>
         </div>
       </div>
       <div class="rm-kpi-row">
@@ -314,6 +325,23 @@ function attachXpltHandler() {
       });
     }
   }
+}
+
+function attachScanToggle() {
+  const btn = document.getElementById("rmScanToggleBtn");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    const starting = btn.textContent.includes("Start");
+    btn.textContent = starting ? "Starting…" : "Stopping…";
+    btn.disabled = true;
+    try {
+      await post(starting ? "/api/scan/start" : "/api/scan/stop");
+      setTimeout(poll, 1000);
+    } catch (e) {
+      btn.textContent = starting ? "▶ Start Scanning" : "⏹ Stop Scanning";
+      btn.disabled = false;
+    }
+  });
 }
 
 function kpi(label, value, mod = "") {

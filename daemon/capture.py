@@ -24,9 +24,10 @@ class CaptureEngine:
         self._on_client  = on_client
         self._on_capture = on_capture
         self._proc: Optional[subprocess.Popen] = None
-        self._running    = False
-        self._lock       = threading.Lock()
-        self._seen_caps  = set()
+        self._running     = False   # monitor thread alive
+        self._scan_active = False   # user has started scanning
+        self._lock        = threading.Lock()
+        self._seen_caps   = set()
 
         self._host  = config.get("bettercap_host", "127.0.0.1")
         self._port  = int(config.get("bettercap_port", 8081))
@@ -131,11 +132,35 @@ class CaptureEngine:
             log.info("New capture: %s (%s / %s)", fname, ssid, cap_type)
             self._on_capture(path, bssid, ssid, cap_type)
 
+    @property
+    def scanning(self) -> bool:
+        return self._scan_active
+
+    def start_scan(self):
+        """Start bettercap and begin polling. Call this manually to begin a session."""
+        if self._scan_active:
+            return
+        self._scan_active = True
+        log.info("Scan started — launching bettercap on %s", self._iface)
+        self._start_bettercap()
+
+    def stop_scan(self):
+        """Stop bettercap and halt polling. Data already in DB is preserved."""
+        if not self._scan_active:
+            return
+        self._scan_active = False
+        self._stop_bettercap()
+        log.info("Scan stopped")
+
     def _monitor_loop(self):
         while self._running:
+            if not self._scan_active:
+                time.sleep(2)
+                continue
+            # Restart bettercap if it crashed while scanning should be active
             if self._proc is None or self._proc.poll() is not None:
                 if shutil.which("bettercap"):
-                    log.warning("bettercap not running — restarting...")
+                    log.warning("bettercap exited unexpectedly — restarting...")
                     self._start_bettercap()
                 else:
                     time.sleep(30)
@@ -144,14 +169,15 @@ class CaptureEngine:
             time.sleep(5)
 
     def start(self):
+        """Start the monitor thread. Does NOT start bettercap — call start_scan() for that."""
         os.makedirs(self._captures_dir, exist_ok=True)
         self._running = True
-        self._start_bettercap()
         t = threading.Thread(target=self._monitor_loop, daemon=True, name="capture")
         t.start()
-        log.info("Capture engine started on %s", self._iface)
+        log.info("Capture engine ready (scanning is off — use the dashboard to start)")
 
     def stop(self):
+        self._scan_active = False
         self._running = False
         self._stop_bettercap()
         log.info("Capture engine stopped")
