@@ -121,4 +121,4 @@ The authors are not responsible for misuse.
 
 ---
 
-*Built with bettercap, aircrack-ng, Flask, and the aspect2020 design system.*
+*Built with bettercap, aircrack-ng, Flask, and the aspect2020 design system.* 
