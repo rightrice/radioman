@@ -70,9 +70,7 @@ class Radioman:
         db.init(self._db_path)
 
         capture_cfg["interface"]   = self._iface
-        capture_cfg["caplet"]      = os.path.join(
-            os.path.dirname(BASE_DIR), "setup", "radioman.cap"
-        )
+        capture_cfg["caplet"]      = os.path.join(BASE_DIR, "radioman.cap")
 
         self.personality = PersonalityEngine()
         self.display     = Display(

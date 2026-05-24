@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -54,8 +55,12 @@ class CaptureEngine:
             return None
 
     def _start_bettercap(self):
+        bc = shutil.which("bettercap")
+        if not bc:
+            log.warning("bettercap not found — capture disabled. Install with: sudo apt install bettercap")
+            return
         cmd = [
-            "bettercap",
+            bc,
             "-iface", self._iface,
             "-caplet", self._caplet,
             "-api-address", f"{self._host}:{self._port}",
@@ -64,12 +69,16 @@ class CaptureEngine:
             "-no-colors",
         ]
         log.info("Starting bettercap: %s", " ".join(cmd))
-        self._proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        time.sleep(4)
+        try:
+            self._proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(4)
+        except Exception as e:
+            log.error("Failed to start bettercap: %s", e)
+            self._proc = None
 
     def _stop_bettercap(self):
         if self._proc and self._proc.poll() is None:
@@ -128,8 +137,12 @@ class CaptureEngine:
     def _monitor_loop(self):
         while self._running:
             if self._proc is None or self._proc.poll() is not None:
-                log.warning("bettercap not running — restarting...")
-                self._start_bettercap()
+                if shutil.which("bettercap"):
+                    log.warning("bettercap not running — restarting...")
+                    self._start_bettercap()
+                else:
+                    time.sleep(30)
+                    continue
             self._poll()
             time.sleep(5)
 
