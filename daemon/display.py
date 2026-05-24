@@ -39,7 +39,10 @@ class Display:
 
         self._epd = _load_epd(self._model)
         if self._epd:
-            self._epd.init()
+            try:
+                self._epd.init(self._epd.FULL_UPDATE)
+            except TypeError:
+                self._epd.init()
             self._epd.Clear(0xFF)
             log.info("E-ink display initialised (%s)", self._model)
         else:
@@ -118,7 +121,10 @@ class Display:
                 img = self._make_frame(personality, stats, battery)
                 if self._epd:
                     buf = self._epd.getbuffer(img)
-                    self._epd.displayPartBaseImage(buf)
+                    try:
+                        self._epd.displayPartBaseImage(buf)
+                    except AttributeError:
+                        self._epd.display(buf)
                 else:
                     _sim_print(personality, stats, battery)
                 self._last = key
