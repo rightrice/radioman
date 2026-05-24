@@ -5,7 +5,10 @@ from flask_cors import CORS
 
 log = logging.getLogger("api")
 
-WEB_DIR = os.path.join(os.path.dirname(__file__), "..", "web")
+_here = os.path.dirname(os.path.abspath(__file__))
+_web_flat = os.path.join(_here, "web")        # deployed flat: /opt/radioman/web
+_web_repo = os.path.join(_here, "..", "web")  # dev repo: daemon/../web
+WEB_DIR = _web_flat if os.path.isdir(_web_flat) else _web_repo
 
 
 def create_app(state: dict) -> Flask:

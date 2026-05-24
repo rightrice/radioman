@@ -23,7 +23,7 @@ def _read_i2c_direct() -> dict:
     try:
         import smbus2
         bus = smbus2.SMBus(_I2C_BUS)
-        pct_raw = bus.read_byte_data(_I2C_ADDR, 0x2A)
+        pct_raw = bus.read_byte_data(_I2C_ADDR, 0x22)
         status  = bus.read_byte_data(_I2C_ADDR, 0x02)
         bus.close()
         return {

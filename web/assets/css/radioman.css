@@ -471,6 +471,119 @@ body { background: #08111f; }
   color: var(--rm-teal);
 }
 
+/* ── Ghost mascot ───────────────────────────────────────────── */
+.rm-mascot-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 0;
+  transition: filter 400ms ease;
+}
+
+.rm-mascot {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  transition: transform 200ms ease, filter 400ms ease;
+}
+
+/* Float — default idle animation */
+@keyframes rm-float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-6px); }
+}
+
+/* Bounce — excited/cracked celebration */
+@keyframes rm-bounce {
+  0%, 100% { transform: translateY(0) scale(1); }
+  30%       { transform: translateY(-12px) scale(1.05); }
+  60%       { transform: translateY(-5px) scale(0.98); }
+}
+
+/* Shake — frustrated */
+@keyframes rm-shake {
+  0%, 100% { transform: translateX(0); }
+  20%       { transform: translateX(-5px) rotate(-2deg); }
+  40%       { transform: translateX(5px) rotate(2deg); }
+  60%       { transform: translateX(-4px) rotate(-1deg); }
+  80%       { transform: translateX(4px) rotate(1deg); }
+}
+
+/* Pulse — sleeping/tired */
+@keyframes rm-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+
+/* Glow — cracked */
+@keyframes rm-glow {
+  0%, 100% { filter: drop-shadow(0 0 6px rgba(52,211,153,0.5)); }
+  50%       { filter: drop-shadow(0 0 18px rgba(52,211,153,0.9)); }
+}
+
+/* Mood-specific animations */
+.rm-mood-default .rm-mascot,
+.rm-mood-happy .rm-mascot,
+.rm-mood-hunting .rm-mascot {
+  animation: rm-float 3s ease-in-out infinite;
+}
+
+.rm-mood-excited .rm-mascot {
+  animation: rm-bounce 0.7s ease-in-out infinite;
+}
+
+.rm-mood-cracked .rm-mascot {
+  animation: rm-bounce 0.6s ease-in-out infinite, rm-glow 1s ease-in-out infinite;
+  filter: drop-shadow(0 0 10px rgba(52,211,153,0.6));
+}
+
+.rm-mood-frustrated .rm-mascot {
+  animation: rm-shake 0.5s ease-in-out infinite;
+  filter: drop-shadow(0 0 8px rgba(248,113,113,0.5));
+}
+
+.rm-mood-sleeping .rm-mascot,
+.rm-mood-tired .rm-mascot {
+  animation: rm-pulse 3s ease-in-out infinite;
+  filter: brightness(0.7) saturate(0.5);
+}
+
+.rm-mood-bored .rm-mascot {
+  animation: rm-float 6s ease-in-out infinite;
+  filter: brightness(0.85) saturate(0.7);
+}
+
+/* Mood badge color variants */
+.rm-mood-badge--happy,
+.rm-mood-badge--hunting {
+  background: var(--rm-green-soft);
+  color: var(--rm-green);
+  border-color: rgba(52, 211, 153, 0.2);
+}
+
+.rm-mood-badge--excited,
+.rm-mood-badge--cracked {
+  background: rgba(52, 211, 153, 0.25);
+  color: var(--rm-green);
+  border-color: rgba(52, 211, 153, 0.4);
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+}
+
+.rm-mood-badge--frustrated {
+  background: var(--rm-red-soft);
+  color: var(--rm-red);
+  border-color: rgba(248, 113, 113, 0.2);
+}
+
+.rm-mood-badge--bored,
+.rm-mood-badge--tired,
+.rm-mood-badge--sleeping {
+  background: var(--rm-amber-soft);
+  color: var(--rm-amber);
+  border-color: rgba(251, 191, 36, 0.2);
+}
+
 /* ── Light mode overrides ───────────────────────────────────── */
 .aap-portfolio[data-aap-theme="light"] body { background: #f5f8fc; }
 .aap-portfolio[data-aap-theme="light"] .rm-face-card,

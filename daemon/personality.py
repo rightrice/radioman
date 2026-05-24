@@ -5,15 +5,15 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 FACES = {
-    "happy":     ["(^‿^)", "(^ᵕ^)", "(◕‿◕)"],
-    "excited":   ["(>‿<)", "(★‿★)", "(✿◠‿◠)"],
-    "bored":     ["(-‿-)", "(¬_¬)", "(-_-)zzz"],
-    "tired":     ["(=_=)", "(￣o￣)", "(。-ω-)"],
-    "frustrated":["(>_<)", "(ò_ó)", "(╯°□°）╯"],
-    "sleeping":  ["(-.-)Zzz", "(￣ω￣)", "(¬д¬)"],
-    "hunting":   ["(ಠ_ಠ)", "(⊙_⊙)", "(ó‿ò)"],
-    "cracked":   ["(ﾉ◕ヮ◕)ﾉ", "(★^O^★)", "\\(^▽^)/"],
-    "default":   ["(•‿•)", "(◑‿◐)", "(｡◕‿◕｡)"],
+    "happy":      ["(^‿^)", "(^ᵕ^)", "(◕‿◕)"],
+    "excited":    ["(>‿<)", "(★‿★)", "(✿◠‿◠)"],
+    "bored":      ["(-‿-)", "(¬_¬)", "(-_-)zzz"],
+    "tired":      ["(=_=)", "(￣o￣)", "(。-ω-)"],
+    "frustrated": ["(>_<)", "(ò_ó)", "(╯°□°）╯"],
+    "sleeping":   ["(-.-)Zzz", "(￣ω￣)", "(¬д¬)"],
+    "hunting":    ["(ಠ_ಠ)", "(⊙_⊙)", "(ó‿ò)"],
+    "cracked":    ["(ﾉ◕ヮ◕)ﾉ", "(★^O^★)", "\\(^▽^)/"],
+    "default":    ["(•‿•)", "(◑‿◐)", "(｡◕‿◕｡)"],
 }
 
 MOODS = ["happy", "excited", "bored", "tired", "frustrated", "sleeping", "hunting", "default"]

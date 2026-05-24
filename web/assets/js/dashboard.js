@@ -126,8 +126,10 @@ function viewOverview(status) {
   return `
     <div class="rm-overview-grid">
       <div class="rm-face-card">
-        <div class="rm-face rm-mono">${esc(p.face || "(•‿•)")}</div>
-        <div class="rm-mood-badge">${esc(p.mood || "default")}</div>
+        <div class="rm-mascot-wrap rm-mood-${esc(p.mood || "default")}">
+          <img class="rm-mascot" src="/assets/img/radioman.png" alt="radioman" />
+        </div>
+        <div class="rm-mood-badge rm-mood-badge--${esc(p.mood || "default")}">${esc(p.mood || "default")}</div>
         <div class="rm-face-message">${esc(p.message || "")}</div>
         <div class="rm-battery">
           <span class="rm-hearts">${hearts}</span>

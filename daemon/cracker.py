@@ -1,42 +1,45 @@
 import logging
 import os
 import queue
+import shutil
 import subprocess
 import threading
 from typing import Callable, Optional
 
 log = logging.getLogger("cracker")
 
-_RESULT_MARKER = "KEY FOUND!"
+_AIRCRACK_MARKER = "KEY FOUND!"
 
 
 class CrackJob:
     def __init__(self, capture_id: int, filepath: str,
-                 bssid: str, ssid: str):
+                 bssid: str, ssid: str, cap_type: str = "EAPOL"):
         self.capture_id = capture_id
         self.filepath   = filepath
         self.bssid      = bssid
         self.ssid       = ssid
+        self.cap_type   = cap_type
 
 
 class CrackQueue:
     def __init__(self, config: dict, on_cracked: Callable):
         self._wordlist   = config.get("wordlist", "/opt/radioman/wordlists/rockyou.txt")
-        self._aircrack  = config.get("aircrack_bin", "aircrack-ng")
-        self._max_jobs  = int(config.get("max_jobs", 1))
+        self._aircrack   = config.get("aircrack_bin", "aircrack-ng")
+        self._hashcat    = config.get("hashcat_bin", "hashcat")
+        self._max_jobs   = int(config.get("max_jobs", 1))
         self._on_cracked = on_cracked
         self._q          = queue.Queue()
         self._running    = False
         self._active     = 0
         self._lock       = threading.Lock()
-        self._seen        = set()
+        self._seen       = set()
 
     def enqueue(self, job: CrackJob):
         if job.filepath in self._seen:
             return
         self._seen.add(job.filepath)
         self._q.put(job)
-        log.info("Queued crack job: %s (%s)", job.ssid or job.bssid, job.filepath)
+        log.info("Queued %s crack: %s", job.cap_type, job.ssid or job.bssid)
 
     def _crack(self, job: CrackJob):
         if not os.path.exists(job.filepath):
@@ -46,39 +49,91 @@ class CrackQueue:
             log.warning("Wordlist missing: %s", self._wordlist)
             return
 
-        log.info("Cracking %s with %s...", job.ssid or job.bssid, self._wordlist)
-        cmd = [
-            self._aircrack, "-q",
-            "-w", self._wordlist,
-            "-b", job.bssid,
-            job.filepath,
-        ] if job.bssid else [
-            self._aircrack, "-q",
-            "-w", self._wordlist,
-            job.filepath,
-        ]
-
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600,
-            )
-            output = result.stdout + result.stderr
-            if _RESULT_MARKER in output:
-                password = _extract_password(output)
-                log.info("CRACKED %s → %s", job.ssid or job.bssid, password)
-                self._on_cracked(job.capture_id, password)
+            if job.cap_type == "PMKID":
+                cracked = self._crack_hashcat(job)
             else:
-                log.info("Not cracked: %s", job.ssid or job.bssid)
-        except subprocess.TimeoutExpired:
-            log.warning("Crack timed out for %s", job.filepath)
-        except FileNotFoundError:
-            log.error("aircrack-ng not found — install with: sudo apt install aircrack-ng")
+                cracked = self._crack_aircrack(job)
+                if not cracked:
+                    cracked = self._crack_hashcat(job)
         finally:
             with self._lock:
                 self._active -= 1
+
+    def _crack_aircrack(self, job: CrackJob) -> bool:
+        log.info("aircrack-ng: %s", job.ssid or job.bssid)
+        cmd = [self._aircrack, "-q", "-w", self._wordlist]
+        if job.bssid:
+            cmd += ["-b", job.bssid]
+        cmd.append(job.filepath)
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            output = result.stdout + result.stderr
+            if _AIRCRACK_MARKER in output:
+                password = _extract_aircrack_password(output)
+                log.info("CRACKED (aircrack) %s → %s", job.ssid or job.bssid, password)
+                self._on_cracked(job.capture_id, password)
+                return True
+            log.info("aircrack-ng: not cracked — %s", job.ssid or job.bssid)
+        except subprocess.TimeoutExpired:
+            log.warning("aircrack-ng timed out: %s", job.filepath)
+        except FileNotFoundError:
+            log.warning("aircrack-ng not found")
+        return False
+
+    def _crack_hashcat(self, job: CrackJob) -> bool:
+        if not shutil.which("hcxpcapngtool"):
+            log.warning("hcxpcapngtool not found — install hcxtools for PMKID cracking")
+            return False
+        if not shutil.which(self._hashcat):
+            log.warning("hashcat not found — PMKID cracking unavailable")
+            return False
+
+        hash_file = job.filepath + ".hc22000"
+        pot_file  = job.filepath + ".pot"
+
+        try:
+            conv = subprocess.run(
+                ["hcxpcapngtool", "-o", hash_file, job.filepath],
+                capture_output=True, timeout=60,
+            )
+            if not os.path.exists(hash_file) or os.path.getsize(hash_file) == 0:
+                log.info("hcxpcapngtool: no hashes extracted from %s", job.filepath)
+                return False
+
+            log.info("hashcat: %s", job.ssid or job.bssid)
+            subprocess.run(
+                [
+                    self._hashcat, "-m", "22000", "-a", "0",
+                    "--force", "--quiet",
+                    "--potfile-path", pot_file,
+                    hash_file, self._wordlist,
+                ],
+                capture_output=True, text=True, timeout=3600,
+            )
+
+            if os.path.exists(pot_file) and os.path.getsize(pot_file) > 0:
+                with open(pot_file) as f:
+                    line = f.readline().strip()
+                if ":" in line:
+                    password = line.rsplit(":", 1)[-1]
+                    log.info("CRACKED (hashcat) %s → %s", job.ssid or job.bssid, password)
+                    self._on_cracked(job.capture_id, password)
+                    return True
+
+            log.info("hashcat: not cracked — %s", job.ssid or job.bssid)
+        except subprocess.TimeoutExpired:
+            log.warning("hashcat timed out: %s", job.filepath)
+        except Exception as e:
+            log.error("hashcat error: %s", e)
+        finally:
+            for f in (hash_file, pot_file):
+                try:
+                    os.unlink(f)
+                except OSError:
+                    pass
+        return False
 
     def _worker(self):
         while self._running:
@@ -121,9 +176,9 @@ class CrackQueue:
             return self._active
 
 
-def _extract_password(output: str) -> str:
+def _extract_aircrack_password(output: str) -> str:
     for line in output.splitlines():
-        if _RESULT_MARKER in line:
+        if _AIRCRACK_MARKER in line:
             parts = line.split("]")
             if len(parts) > 1:
                 return parts[-1].strip()

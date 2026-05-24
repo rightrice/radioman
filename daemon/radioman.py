@@ -33,7 +33,7 @@ log = logging.getLogger("radioman")
 
 DEFAULT_CONFIG = os.environ.get(
     "RADIOMAN_CONFIG",
-    os.path.join(os.path.dirname(BASE_DIR), "config", "radioman.conf"),
+    os.path.join(BASE_DIR, "radioman.conf"),
 )
 
 
@@ -74,7 +74,7 @@ class Radioman:
 
         self.personality = PersonalityEngine()
         self.display     = Display(
-            model=display_cfg.get("model", "epd2in13_V3"),
+            model=display_cfg.get("model", "epd2in13_V2"),
             rotate=int(display_cfg.get("rotate", 180)),
         )
         self.scanner     = NetworkScanner(iface=self._iface)
@@ -113,7 +113,7 @@ class Radioman:
                      f"Captured {cap_type}: {ssid or bssid}")
         self.personality.on_capture(ssid)
         job = CrackJob(capture_id=cap_id, filepath=filepath,
-                       bssid=bssid, ssid=ssid)
+                       bssid=bssid, ssid=ssid, cap_type=cap_type)
         self.crack_queue.enqueue(job)
 
     def _on_cracked(self, capture_id, password):
@@ -188,8 +188,13 @@ class Radioman:
         log.info("Goodbye.")
 
 
+_instance: "Radioman | None" = None
+
+
 def _handle_signal(signum, frame):
     log.info("Signal %d received", signum)
+    if _instance:
+        _instance.stop()
     sys.exit(0)
 
 
@@ -201,5 +206,5 @@ if __name__ == "__main__":
     if not os.path.exists(config_path):
         log.warning("Config not found at %s — using defaults", config_path)
 
-    radioman = Radioman(config_path)
-    radioman.start()
+    _instance = Radioman(config_path)
+    _instance.start()

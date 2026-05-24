@@ -109,7 +109,10 @@ def insert_capture(path: str, filename: str, bssid: str, ssid: str, cap_type: st
         VALUES (?, ?, ?, ?, ?)
     """, (filename, bssid, ssid, cap_type, now))
     conn.commit()
-    return cur.lastrowid
+    if cur.lastrowid:
+        return cur.lastrowid
+    row = conn.execute("SELECT id FROM captures WHERE filename=?", (filename,)).fetchone()
+    return row["id"] if row else 0
 
 
 def mark_cracked(path: str, capture_id: int, password: str):

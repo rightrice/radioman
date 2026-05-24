@@ -30,39 +30,64 @@ log "Updating system packages..."
 apt-get update -qq
 apt-get upgrade -y -qq
 
-# ── Core dependencies ──────────────────────────────────────────────────────────
+# ── Core system dependencies ───────────────────────────────────────────────────
 log "Installing system dependencies..."
 apt-get install -y -qq \
   python3 python3-pip python3-venv python3-dev \
   python3-lgpio \
-  git curl wget unzip \
-  aircrack-ng \
-  nmap \
+  git curl wget unzip ca-certificates \
   sqlite3 \
-  libssl-dev libffi-dev \
-  fonts-dejavu-core \
-  i2c-tools \
-  libjpeg-dev zlib1g-dev \
+  nmap \
+  aircrack-ng \
   iw wireless-tools rfkill \
+  i2c-tools \
+  libssl-dev libffi-dev \
+  libpcap-dev libpcap0.8 \
+  libcurl4-openssl-dev \
+  libhwloc-dev \
+  libjpeg-dev zlib1g-dev \
+  libusb-1.0-0-dev \
   swig \
   liblgpio-dev \
+  fonts-dejavu-core \
+  fonts-noto \
+  fonts-noto-cjk \
+  fonts-noto-extra \
   wordlists
 
-# ── Enable SPI, I2C, and USB gadget mode ──────────────────────────────────────
-log "Configuring boot options (SPI, I2C, USB gadget)..."
+# ── hcxtools (PMKID extraction) ────────────────────────────────────────────────
+log "Installing hcxtools..."
+if apt-get install -y -qq hcxtools 2>/dev/null; then
+  log "hcxtools installed via apt"
+else
+  warn "hcxtools not in apt — building from source..."
+  apt-get install -y -qq build-essential pkg-config
+  TMP=$(mktemp -d)
+  git clone --depth=1 -q https://github.com/ZerBea/hcxtools "$TMP/hcxtools"
+  make -C "$TMP/hcxtools" -j2 --quiet
+  make -C "$TMP/hcxtools" install --quiet
+  rm -rf "$TMP"
+  log "hcxtools built and installed"
+fi
 
-CONFIG_FILE="/boot/firmware/config.txt"
-[ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
-CMDLINE_FILE="/boot/firmware/cmdline.txt"
-[ -f "/boot/cmdline.txt" ] && CMDLINE_FILE="/boot/cmdline.txt"
-
-grep -q "^dtparam=spi=on"    "$CONFIG_FILE" || echo "dtparam=spi=on"    >> "$CONFIG_FILE"
-grep -q "^dtparam=i2c_arm=on" "$CONFIG_FILE" || echo "dtparam=i2c_arm=on" >> "$CONFIG_FILE"
-grep -q "^dtoverlay=dwc2"    "$CONFIG_FILE" || echo "dtoverlay=dwc2"    >> "$CONFIG_FILE"
-
-if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
-  sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
-  log "USB gadget ethernet enabled — SSH via USB cable after reboot"
+# ── hashcat (PMKID + EAPOL cracking) ──────────────────────────────────────────
+log "Installing hashcat..."
+if apt-get install -y -qq hashcat 2>/dev/null; then
+  log "hashcat installed via apt"
+else
+  warn "hashcat not in apt — building from source..."
+  apt-get install -y -qq build-essential pkg-config libssl-dev
+  TMP=$(mktemp -d)
+  HC_VER=$(curl -s https://api.github.com/repos/hashcat/hashcat/releases/latest \
+           | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
+  wget -q "https://github.com/hashcat/hashcat/releases/download/v${HC_VER}/hashcat-${HC_VER}.tar.gz" \
+    -O "$TMP/hashcat.tar.gz"
+  tar -xzf "$TMP/hashcat.tar.gz" -C "$TMP"
+  make -C "$TMP/hashcat-${HC_VER}" -j2 --quiet
+  cp "$TMP/hashcat-${HC_VER}/hashcat" /usr/local/bin/hashcat
+  cp -r "$TMP/hashcat-${HC_VER}/OpenCL" /usr/local/share/hashcat-opencl 2>/dev/null || true
+  rm -rf "$TMP"
+  log "hashcat built and installed"
 fi
 
 # ── bettercap ──────────────────────────────────────────────────────────────────
@@ -84,8 +109,7 @@ else
   info "bettercap already installed"
 fi
 
-BETTERCAP_BIN=$(command -v bettercap)
-setcap cap_net_raw,cap_net_admin+eip "$BETTERCAP_BIN" 2>/dev/null || \
+setcap cap_net_raw,cap_net_admin+eip "$(command -v bettercap)" 2>/dev/null || \
   warn "Could not set bettercap capabilities — will require sudo"
 
 # ── PiSugar 2 ─────────────────────────────────────────────────────────────────
@@ -104,6 +128,23 @@ if [ ! -d "/opt/waveshare-epd" ]; then
   log "Waveshare library cloned"
 else
   info "Waveshare library already present"
+fi
+
+# ── Enable SPI, I2C, and USB gadget mode ──────────────────────────────────────
+log "Configuring boot options (SPI, I2C, USB gadget)..."
+
+CONFIG_FILE="/boot/firmware/config.txt"
+[ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
+CMDLINE_FILE="/boot/firmware/cmdline.txt"
+[ -f "/boot/cmdline.txt" ] && CMDLINE_FILE="/boot/cmdline.txt"
+
+grep -q "^dtparam=spi=on"     "$CONFIG_FILE" || echo "dtparam=spi=on"     >> "$CONFIG_FILE"
+grep -q "^dtparam=i2c_arm=on" "$CONFIG_FILE" || echo "dtparam=i2c_arm=on" >> "$CONFIG_FILE"
+grep -q "^dtoverlay=dwc2"     "$CONFIG_FILE" || echo "dtoverlay=dwc2"     >> "$CONFIG_FILE"
+
+if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
+  sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
+  log "USB gadget ethernet enabled — SSH via USB cable after reboot"
 fi
 
 # ── Radioman directories and source files ──────────────────────────────────────
@@ -176,6 +217,20 @@ cp "$SCRIPT_DIR/setup/radioman.service" /etc/systemd/system/radioman.service
 systemctl daemon-reload
 systemctl enable radioman.service
 log "radioman service installed and enabled"
+
+# ── Verify critical tools ──────────────────────────────────────────────────────
+echo ""
+log "Verifying tool installation..."
+ALL_OK=true
+for tool in bettercap aircrack-ng hcxpcapngtool hashcat nmap iw; do
+  if command -v "$tool" &>/dev/null; then
+    info "  [OK] $tool"
+  else
+    warn "  [MISSING] $tool"
+    ALL_OK=false
+  fi
+done
+$ALL_OK || warn "Some tools are missing — check warnings above."
 
 echo ""
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
