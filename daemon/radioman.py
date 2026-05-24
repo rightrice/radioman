@@ -22,6 +22,7 @@ from display import Display
 from capture import CaptureEngine
 from cracker import CrackQueue, CrackJob
 from scanner import NetworkScanner
+from xplt import XpltSync
 from api import create_app
 
 logging.basicConfig(
@@ -52,6 +53,7 @@ def flat(cfg: configparser.ConfigParser, section: str) -> dict:
 
 class Radioman:
     def __init__(self, config_path: str):
+        self._conf_path = config_path
         cfg = load_config(config_path)
 
         main_cfg    = flat(cfg, "radioman")
@@ -60,6 +62,7 @@ class Radioman:
         db_cfg      = flat(cfg, "database")
         pisugar_cfg = flat(cfg, "pisugar")
         display_cfg = flat(cfg, "display")
+        xplt_cfg    = flat(cfg, "xplt")
 
         self._iface       = main_cfg.get("interface", "wlan0")
         self._web_port    = int(main_cfg.get("web_port", 8080))
@@ -72,6 +75,7 @@ class Radioman:
         capture_cfg["interface"]   = self._iface
         capture_cfg["caplet"]      = os.path.join(BASE_DIR, "radioman.cap")
 
+        self.xplt_sync   = XpltSync(xplt_cfg, self._db_path)
         self.personality = PersonalityEngine()
         self.display     = Display(
             model=display_cfg.get("model", "epd2in13_V2"),
@@ -88,11 +92,13 @@ class Radioman:
 
         self._state = {
             "db_path":    self._db_path,
+            "conf_path":  self._conf_path,
             "personality": self.personality,
             "battery":    bat.read,
             "scanner":    self.scanner,
             "capture":    self.capture,
             "crack_queue": self.crack_queue,
+            "xplt_sync":  self.xplt_sync,
         }
 
         self._running = False
@@ -127,6 +133,7 @@ class Radioman:
         db.mark_cracked(self._db_path, capture_id, password)
         db.log_event(self._db_path, "cracked", f"Cracked capture #{capture_id}: {password}")
         self.personality.on_crack(password=password)
+        self.xplt_sync.sync_now()
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
@@ -170,6 +177,7 @@ class Radioman:
         self.scanner.start()
         self.crack_queue.start()
         self.capture.start()
+        self.xplt_sync.start()
 
         threading.Thread(target=self._display_loop,    daemon=True, name="display").start()
         threading.Thread(target=self._personality_loop, daemon=True, name="personality").start()
@@ -190,6 +198,7 @@ class Radioman:
         self.capture.stop()
         self.crack_queue.stop()
         self.scanner.stop()
+        self.xplt_sync.stop()
         self.display.sleep()
         db.log_event(self._db_path, "info", "radioman stopped")
         log.info("Goodbye.")

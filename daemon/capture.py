@@ -175,19 +175,25 @@ def _parse_security(auth: str) -> str:
 def _parse_capture_filename(fname: str):
     """
     bettercap names captures like: <BSSID>_<ESSID>.pcap
-    or handshake_<BSSID>_<ESSID>.pcap
-    Best-effort extraction.
+    or handshake_<BSSID>_<ESSID>.pcap  (prefix varies)
+    Best-effort extraction; degrades gracefully on unexpected names.
     """
-    base = fname.replace(".pcapng", "").replace(".pcap", "").replace(".cap", "")
+    base  = fname.replace(".pcapng", "").replace(".pcap", "").replace(".cap", "")
     parts = base.split("_")
     bssid = ""
     ssid  = ""
-    if len(parts) >= 2:
-        candidate = parts[0] if ":" in parts[0] else (parts[1] if len(parts) > 1 else "")
-        if len(candidate) == 17 and candidate.count(":") == 5:
-            bssid = candidate.upper()
-            ssid  = "_".join(parts[1:]) if parts[0] == bssid else "_".join(parts[2:])
-        else:
-            ssid = base
+
+    def _is_bssid(s: str) -> bool:
+        return len(s) == 17 and s.count(":") == 5
+
+    # Walk parts looking for a MAC-address-shaped token
+    for i, part in enumerate(parts):
+        if _is_bssid(part):
+            bssid = part.upper()
+            ssid  = "_".join(parts[i + 1:])
+            break
+    else:
+        ssid = base  # no BSSID found — use whole stem as SSID
+
     cap_type = "PMKID" if "pmkid" in fname.lower() else "EAPOL"
     return bssid, ssid, cap_type

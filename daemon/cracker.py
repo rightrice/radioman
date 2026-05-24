@@ -4,6 +4,7 @@ import queue
 import shutil
 import subprocess
 import threading
+import time
 from typing import Callable, Optional
 
 log = logging.getLogger("cracker")
@@ -155,7 +156,7 @@ class CrackQueue:
                 with self._lock:
                     if self._active < self._max_jobs:
                         break
-                threading.Event().wait(1)
+                time.sleep(1)
 
     def start(self):
         self._running = True

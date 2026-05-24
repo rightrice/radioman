@@ -1,0 +1,31 @@
+# ── Secrets — never commit these ──────────────────────────────
+# radioman.conf holds the device_token; use radioman.conf.example as the template
+config/radioman.conf
+*.secrets
+*.key
+
+# ── Runtime artifacts ──────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# ── Captures and database ─────────────────────────────────────
+*.pcap
+*.pcapng
+*.cap
+*.db
+*.db-shm
+*.db-wal
+*.hc22000
+*.pot
+
+# ── OS / editor ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

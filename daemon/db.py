@@ -68,6 +68,16 @@ def init(path: str):
         CREATE INDEX IF NOT EXISTS idx_captures_bssid ON captures(bssid);
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
     """)
+    # Add xplt_synced tracking columns to existing tables (safe on re-run)
+    for col_sql in [
+        "ALTER TABLE networks ADD COLUMN xplt_synced INTEGER DEFAULT 0",
+        "ALTER TABLE clients  ADD COLUMN xplt_synced INTEGER DEFAULT 0",
+        "ALTER TABLE captures ADD COLUMN xplt_synced INTEGER DEFAULT 0",
+    ]:
+        try:
+            conn.execute(col_sql)
+        except Exception:
+            pass  # column already exists
     conn.commit()
 
 
@@ -123,8 +133,9 @@ def insert_capture(path: str, filename: str, bssid: str, ssid: str, cap_type: st
 
 def mark_cracked(path: str, capture_id: int, password: str):
     conn = get_conn(path)
+    # Reset xplt_synced so the cracked result gets pushed on the next sync
     conn.execute("""
-        UPDATE captures SET cracked=1, password=? WHERE id=?
+        UPDATE captures SET cracked=1, password=?, xplt_synced=0 WHERE id=?
     """, (password, capture_id))
     conn.commit()
 
@@ -180,6 +191,63 @@ def get_events(path: str, limit: int = 50) -> list:
         "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_unsynced_networks(path: str, limit: int = 200) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT * FROM networks WHERE xplt_synced=0 LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_synced_networks(path: str, bssids: list) -> None:
+    if not bssids:
+        return
+    conn = get_conn(path)
+    conn.execute(
+        f"UPDATE networks SET xplt_synced=1 WHERE bssid IN ({','.join('?' * len(bssids))})",
+        bssids,
+    )
+    conn.commit()
+
+
+def get_unsynced_clients(path: str, limit: int = 200) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT * FROM clients WHERE xplt_synced=0 LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_synced_clients(path: str, macs: list) -> None:
+    if not macs:
+        return
+    conn = get_conn(path)
+    conn.execute(
+        f"UPDATE clients SET xplt_synced=1 WHERE mac IN ({','.join('?' * len(macs))})",
+        macs,
+    )
+    conn.commit()
+
+
+def get_unsynced_captures(path: str, limit: int = 200) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT * FROM captures WHERE xplt_synced=0 LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_synced_captures(path: str, ids: list) -> None:
+    if not ids:
+        return
+    conn = get_conn(path)
+    conn.execute(
+        f"UPDATE captures SET xplt_synced=1 WHERE id IN ({','.join('?' * len(ids))})",
+        ids,
+    )
+    conn.commit()
 
 
 def add_ignored(path: str, bssid: str, note: str = "") -> None:

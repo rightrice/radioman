@@ -1,3 +1,9 @@
+# radioman.conf.example — copy to radioman.conf and fill in your values
+# This file is safe to commit. radioman.conf is gitignored.
+#
+# On the Pi after install:
+#   sudo nano /opt/radioman/radioman.conf
+
 [radioman]
 # Network interface for monitor mode
 interface = wlan0
@@ -45,6 +51,11 @@ path = /opt/radioman/radioman.db
 # PiSugar 2 I2C address
 i2c_address = 0x75
 i2c_bus = 1
+
+[xplt]
+# Device token — set automatically when you pair via the web dashboard
+# (http://radioman.local:8080). Do not edit manually.
+# device_token =
 
 [display]
 # Waveshare 2.13" model: epd2in13, epd2in13_V2, epd2in13_V3, epd2in13_V4

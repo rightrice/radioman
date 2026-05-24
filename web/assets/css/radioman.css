@@ -624,6 +624,38 @@ body { background: #08111f; }
 .rm-ignore-btn:hover   { border-color: var(--rm-amber); color: var(--rm-amber); }
 .rm-ignore-btn.rm-ignored { color: var(--aap-muted); cursor: default; }
 
+/* ── XPLT sync panel ────────────────────────────────────────── */
+.rm-xplt-panel { margin-top: 1rem; }
+
+.rm-xplt-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.rm-xplt-ok  { background: var(--rm-green-soft); color: var(--rm-green); }
+.rm-xplt-err { background: var(--rm-red-soft);   color: var(--rm-red); }
+.rm-xplt-off { background: var(--aap-line);       color: var(--aap-muted); }
+
+.rm-xplt-body {
+  padding: 0.85rem 1.25rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.rm-xplt-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.82rem;
+}
+.rm-xplt-row > span:first-child { min-width: 100px; }
+
 /* ── Light mode overrides ───────────────────────────────────── */
 .aap-portfolio[data-aap-theme="light"] body { background: #f5f8fc; }
 .aap-portfolio[data-aap-theme="light"] .rm-face-card,

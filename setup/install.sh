@@ -153,9 +153,17 @@ mkdir -p "$RADIOMAN_DIR" "$CAPTURES_DIR" "$WORDLISTS_DIR"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 log "Copying source files from $SCRIPT_DIR..."
-cp "$SCRIPT_DIR/daemon/"*.py  "$RADIOMAN_DIR/"
-cp -r "$SCRIPT_DIR/web"       "$RADIOMAN_DIR/web"
-cp "$SCRIPT_DIR/config/radioman.conf" "$RADIOMAN_DIR/radioman.conf"
+cp "$SCRIPT_DIR/daemon/"*.py "$RADIOMAN_DIR/"
+cp -r "$SCRIPT_DIR/web"     "$RADIOMAN_DIR/web"
+
+# Only create radioman.conf from the example if one doesn't exist yet.
+# This preserves any API keys the user has already configured.
+if [ ! -f "$RADIOMAN_DIR/radioman.conf" ]; then
+  cp "$SCRIPT_DIR/config/radioman.conf.example" "$RADIOMAN_DIR/radioman.conf"
+  warn "Created radioman.conf from example — edit it to add your XPLT keys."
+else
+  info "radioman.conf already exists — skipping (your keys are safe)."
+fi
 cp "$SCRIPT_DIR/setup/radioman.cap"   "$RADIOMAN_DIR/radioman.cap"
 
 # ── Python virtual environment ─────────────────────────────────────────────────

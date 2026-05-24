@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
@@ -99,14 +100,25 @@ def create_app(state: dict) -> Flask:
 
     @app.route("/api/hosts/scan", methods=["POST"])
     def hosts_scan():
-        target = request.json.get("target") if request.is_json else None
+        target = None
+        if request.is_json:
+            raw = request.json.get("target", "")
+            if raw:
+                # Accept only IP, CIDR, or hostname-looking strings — no nmap flags
+                if re.fullmatch(r"[\w.\-/]+", str(raw)):
+                    target = str(raw)
+                else:
+                    return jsonify({"error": "invalid target format"}), 400
         results = state["scanner"].nmap_scan(target)
         return jsonify(results)
 
     # ── Events / log ─────────────────────────────────────────────────────────
     @app.route("/api/events")
     def events():
-        limit = min(int(request.args.get("limit", 50)), 200)
+        try:
+            limit = min(int(request.args.get("limit", 50)), 200)
+        except (ValueError, TypeError):
+            limit = 50
         return jsonify(_db.get_events(_db_path(), limit))
 
     # ── Ignore list ───────────────────────────────────────────────────────────
@@ -132,6 +144,48 @@ def create_app(state: dict) -> Flask:
         if removed:
             _db.log_event(_db_path(), "info", f"Unignored BSSID: {bssid}")
         return jsonify({"removed": removed, "bssid": bssid})
+
+    # ── XPLT / Supabase sync ─────────────────────────────────────────────────
+    @app.route("/api/xplt/status")
+    def xplt_status():
+        return jsonify(state["xplt_sync"].snapshot())
+
+    @app.route("/api/xplt/sync", methods=["POST"])
+    def xplt_sync_now():
+        state["xplt_sync"].sync_now()
+        return jsonify({"triggered": True})
+
+    @app.route("/api/xplt/pair", methods=["POST"])
+    def xplt_pair():
+        import configparser as _cp
+        data = request.json or {}
+        code = str(data.get("code", "")).strip().upper().replace(" ", "").replace("-", "")
+        device_name = str(data.get("device_name", "")).strip()[:80] or "radioman"
+
+        if len(code) != 8 or not code.isalnum():
+            return jsonify({"error": "Code must be exactly 8 alphanumeric characters"}), 400
+
+        try:
+            token = state["xplt_sync"].pair(code, device_name)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+
+        # Persist token to radioman.conf so it survives restarts
+        conf_path = state.get("conf_path", "")
+        if conf_path and os.path.exists(conf_path):
+            try:
+                cfg = _cp.ConfigParser()
+                cfg.read(conf_path)
+                if "xplt" not in cfg:
+                    cfg.add_section("xplt")
+                cfg.set("xplt", "device_token", token)
+                with open(conf_path, "w") as fh:
+                    cfg.write(fh)
+            except Exception as e:
+                log.error("Failed to write token to conf: %s", e)
+
+        _db.log_event(_db_path(), "info", f"Device paired with XPLT as '{device_name}'")
+        return jsonify({"paired": True})
 
     # ── bettercap pass-through commands ───────────────────────────────────────
     @app.route("/api/cmd", methods=["POST"])

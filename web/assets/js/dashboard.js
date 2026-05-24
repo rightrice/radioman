@@ -60,14 +60,13 @@ function setStatus(ok) {
 // ── Poll loop ─────────────────────────────────────────────────────────────────
 async function poll() {
   try {
-    const [status, data] = await Promise.all([
-      get("/api/status"),
-      fetchViewData(),
-    ]);
+    const fetches = [get("/api/status"), fetchViewData()];
+    if (currentView === "overview") fetches.push(fetchXpltStatus());
+    const [status, data, xplt] = await Promise.all(fetches);
     setStatus(true);
     document.getElementById("rmLoading")?.remove();
     updateUptime(status.personality?.uptime_seconds || 0);
-    renderMain(status, data);
+    renderMain(status, data, xplt || null);
   } catch (e) {
     setStatus(false);
     console.error("Poll error:", e);
@@ -87,6 +86,11 @@ async function fetchViewData() {
   }
 }
 
+async function fetchXpltStatus() {
+  try { return await get("/api/xplt/status"); }
+  catch { return null; }
+}
+
 function updateUptime(secs) {
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
@@ -100,10 +104,10 @@ function renderView() {
   poll();
 }
 
-function renderMain(status, data) {
+function renderMain(status, data, xplt = null) {
   const main = document.getElementById("rmMain");
   switch (currentView) {
-    case "overview":  main.innerHTML = viewOverview(status); break;
+    case "overview":  main.innerHTML = viewOverview(status, xplt); attachXpltHandler(); break;
     case "networks":  main.innerHTML = viewNetworks(data || []); break;
     case "clients":   main.innerHTML = viewClients(data || []); break;
     case "captures":  main.innerHTML = viewCaptures(data || []); attachCrackHandlers(); break;
@@ -115,7 +119,7 @@ function renderMain(status, data) {
 }
 
 // ── Overview ──────────────────────────────────────────────────────────────────
-function viewOverview(status) {
+function viewOverview(status, xplt) {
   const p    = status.personality || {};
   const b    = status.battery     || {};
   const s    = status.stats       || {};
@@ -151,7 +155,8 @@ function viewOverview(status) {
     <div class="dash-panels">
       ${recentNetworksPanel()}
       ${recentEventsPanel()}
-    </div>`;
+    </div>
+    ${xpltPanel(xplt)}`;
 }
 
 function recentNetworksPanel() {
@@ -179,6 +184,136 @@ function recentEventsPanel() {
         <p>Loading…</p>
       </div>
     </div>`;
+}
+
+function xpltPanel(x) {
+  if (!x) return "";
+  if (!x.enabled) return `
+    <div class="dash-panel dash-panel-full rm-xplt-panel">
+      <div class="dash-panel-header">
+        <h3>XPLT Sync</h3>
+        <span class="rm-xplt-badge rm-xplt-off">not paired</span>
+      </div>
+      <div class="rm-xplt-body">
+        <p class="rm-muted" style="margin-bottom:1rem;font-size:0.85rem">
+          Open your XPLT account, go to <strong>Integrations → Radioman</strong>,
+          and generate a pairing code. Then enter it below.
+        </p>
+        <div class="rm-ignore-form">
+          <input class="rm-ignore-input rm-mono" id="rmPairCode"
+                 placeholder="XXXXXXXX" maxlength="9" spellcheck="false"
+                 autocomplete="off" autocorrect="off" autocapitalize="characters"
+                 style="letter-spacing:2px;text-transform:uppercase" />
+          <input class="rm-ignore-input" id="rmPairName"
+                 placeholder="Device name (e.g. radioman-1)" maxlength="80" />
+          <button class="rm-btn rm-btn-primary" id="rmPairBtn">Connect to XPLT</button>
+        </div>
+        <div id="rmPairError" style="color:var(--rm-red);font-size:0.8rem;margin-top:0.5rem;display:none"></div>
+      </div>
+    </div>`;
+
+  const online   = !x.last_error;
+  const lastSync = x.last_sync
+    ? new Date(x.last_sync * 1000).toLocaleString(undefined, {
+        month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+      })
+    : "never";
+
+  return `
+    <div class="dash-panel dash-panel-full rm-xplt-panel">
+      <div class="dash-panel-header">
+        <h3>XPLT Sync</h3>
+        <span class="rm-xplt-badge ${online ? "rm-xplt-ok" : "rm-xplt-err"}">
+          ${online ? "connected" : "error"}
+        </span>
+      </div>
+      <div class="rm-xplt-body">
+        <div class="rm-xplt-row">
+          <span class="rm-muted">Last sync</span>
+          <span class="rm-mono">${lastSync}</span>
+        </div>
+        <div class="rm-xplt-row">
+          <span class="rm-muted">Pending</span>
+          <span class="rm-mono ${x.pending > 0 ? "rm-amber" : ""}">${x.pending} record${x.pending !== 1 ? "s" : ""}</span>
+        </div>
+        <div class="rm-xplt-row">
+          <span class="rm-muted">Total pushed</span>
+          <span class="rm-mono rm-teal">${x.total_pushed}</span>
+        </div>
+        ${x.last_error ? `<div class="rm-xplt-row rm-red rm-muted">${esc(x.last_error)}</div>` : ""}
+        <button class="rm-btn rm-btn-primary" id="rmXpltSyncBtn" style="margin-top:0.5rem">
+          Sync now
+        </button>
+      </div>
+    </div>`;
+}
+
+function attachXpltHandler() {
+  // Sync button (connected state)
+  const syncBtn = document.getElementById("rmXpltSyncBtn");
+  if (syncBtn) {
+    syncBtn.addEventListener("click", async () => {
+      syncBtn.textContent = "Syncing…";
+      syncBtn.disabled = true;
+      try {
+        await post("/api/xplt/sync");
+        setTimeout(poll, 3000);
+      } catch (e) {
+        syncBtn.textContent = "Error";
+      }
+      setTimeout(() => { syncBtn.textContent = "Sync now"; syncBtn.disabled = false; }, 4000);
+    });
+  }
+
+  // Pair button (not-paired state)
+  const pairBtn = document.getElementById("rmPairBtn");
+  if (pairBtn) {
+    pairBtn.addEventListener("click", async () => {
+      const codeEl = document.getElementById("rmPairCode");
+      const nameEl = document.getElementById("rmPairName");
+      const errEl  = document.getElementById("rmPairError");
+      const code   = (codeEl?.value || "").replace(/[\s\-]/g, "").toUpperCase();
+      const name   = (nameEl?.value || "").trim() || "radioman";
+
+      if (code.length !== 8) {
+        errEl.textContent = "Enter the 8-character code from your XPLT account";
+        errEl.style.display = "";
+        codeEl?.focus();
+        return;
+      }
+      errEl.style.display = "none";
+      pairBtn.textContent = "Connecting…";
+      pairBtn.disabled = true;
+
+      try {
+        const result = await post("/api/xplt/pair", { code, device_name: name });
+        if (result.error) {
+          errEl.textContent = result.error;
+          errEl.style.display = "";
+          pairBtn.textContent = "Connect to XPLT";
+          pairBtn.disabled = false;
+        } else {
+          pairBtn.textContent = "Paired!";
+          setTimeout(poll, 1500);
+        }
+      } catch (e) {
+        errEl.textContent = "Network error — check your connection and try again";
+        errEl.style.display = "";
+        pairBtn.textContent = "Connect to XPLT";
+        pairBtn.disabled = false;
+      }
+    });
+
+    // Allow typing XXXX XXXX with auto-space after 4 chars
+    const codeEl = document.getElementById("rmPairCode");
+    if (codeEl) {
+      codeEl.addEventListener("input", () => {
+        let v = codeEl.value.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 8);
+        codeEl.value = v.length > 4 ? v.slice(0, 4) + " " + v.slice(4) : v;
+      });
+    }
+  }
 }
 
 function kpi(label, value, mod = "") {
