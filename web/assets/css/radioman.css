@@ -584,6 +584,46 @@ body { background: #08111f; }
   border-color: rgba(251, 191, 36, 0.2);
 }
 
+/* ── Ignore list ────────────────────────────────────────────── */
+.rm-ignore-form {
+  display: flex;
+  gap: 0.6rem;
+  padding: 1rem 1.25rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.rm-ignore-input {
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--aap-line);
+  background: var(--aap-surface-soft, rgba(255,255,255,0.04));
+  color: var(--aap-text);
+  font: inherit;
+  font-size: 0.83rem;
+  transition: border-color 140ms;
+  outline: none;
+}
+.rm-ignore-input:focus { border-color: var(--rm-teal); }
+.rm-ignore-input:first-child { width: 170px; }
+.rm-ignore-input:nth-child(2) { flex: 1; min-width: 160px; }
+
+.rm-ignore-btn {
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--aap-line);
+  background: transparent;
+  color: var(--aap-muted);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 140ms, color 140ms;
+  white-space: nowrap;
+}
+.rm-ignore-btn:hover   { border-color: var(--rm-amber); color: var(--rm-amber); }
+.rm-ignore-btn.rm-ignored { color: var(--aap-muted); cursor: default; }
+
 /* ── Light mode overrides ───────────────────────────────────── */
 .aap-portfolio[data-aap-theme="light"] body { background: #f5f8fc; }
 .aap-portfolio[data-aap-theme="light"] .rm-face-card,

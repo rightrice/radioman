@@ -100,14 +100,21 @@ class Radioman:
     # ── Event callbacks ───────────────────────────────────────────────────────
 
     def _on_network(self, bssid, ssid, channel, rssi, security, vendor):
+        if db.is_ignored(self._db_path, bssid):
+            return
         db.upsert_network(self._db_path, bssid, ssid, channel, rssi, security, vendor)
         db.log_event(self._db_path, "info", f"AP: {ssid or bssid} ch{channel} {security}")
         self.personality.on_new_network()
 
     def _on_client(self, mac, bssid, rssi, vendor):
+        if bssid and db.is_ignored(self._db_path, bssid):
+            return
         db.upsert_client(self._db_path, mac, bssid, rssi, vendor)
 
     def _on_capture(self, filepath, bssid, ssid, cap_type):
+        if bssid and db.is_ignored(self._db_path, bssid):
+            log.info("Skipping capture for ignored BSSID %s", bssid)
+            return
         cap_id = db.insert_capture(self._db_path, filepath, bssid, ssid, cap_type)
         db.log_event(self._db_path, "capture",
                      f"Captured {cap_type}: {ssid or bssid}")

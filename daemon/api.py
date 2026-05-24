@@ -109,6 +109,30 @@ def create_app(state: dict) -> Flask:
         limit = min(int(request.args.get("limit", 50)), 200)
         return jsonify(_db.get_events(_db_path(), limit))
 
+    # ── Ignore list ───────────────────────────────────────────────────────────
+    @app.route("/api/ignore", methods=["GET"])
+    def get_ignore():
+        return jsonify(_db.get_ignored(_db_path()))
+
+    @app.route("/api/ignore", methods=["POST"])
+    def add_ignore():
+        data = request.json or {}
+        bssid = data.get("bssid", "").strip().upper()
+        if not bssid:
+            return jsonify({"error": "bssid required"}), 400
+        note = data.get("note", "").strip()
+        _db.add_ignored(_db_path(), bssid, note)
+        _db.log_event(_db_path(), "info", f"Ignored BSSID: {bssid}")
+        return jsonify({"ignored": True, "bssid": bssid})
+
+    @app.route("/api/ignore/<bssid>", methods=["DELETE"])
+    def remove_ignore(bssid: str):
+        bssid = bssid.upper()
+        removed = _db.remove_ignored(_db_path(), bssid)
+        if removed:
+            _db.log_event(_db_path(), "info", f"Unignored BSSID: {bssid}")
+        return jsonify({"removed": removed, "bssid": bssid})
+
     # ── bettercap pass-through commands ───────────────────────────────────────
     @app.route("/api/cmd", methods=["POST"])
     def cmd():

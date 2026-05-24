@@ -209,6 +209,7 @@ fi
 # ── Permissions ────────────────────────────────────────────────────────────────
 log "Setting permissions..."
 chmod +x "$RADIOMAN_DIR/radioman.py"
+chmod +x "$RADIOMAN_DIR/ignore_cli.py"
 chmod 755 "$CAPTURES_DIR" "$WORDLISTS_DIR"
 
 # ── systemd service ────────────────────────────────────────────────────────────

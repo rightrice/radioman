@@ -82,6 +82,7 @@ async function fetchViewData() {
     case "graph":     return get("/api/graph");
     case "hosts":     return get("/api/hosts");
     case "log":       return get("/api/events?limit=100");
+    case "ignore":    return get("/api/ignore");
     default:          return null;
   }
 }
@@ -109,6 +110,7 @@ function renderMain(status, data) {
     case "graph":     main.innerHTML = viewGraph(); drawGraph(data || { nodes: [], edges: [] }); break;
     case "hosts":     main.innerHTML = viewHosts(data || [], status); attachScanHandler(); break;
     case "log":       main.innerHTML = viewLog(data || []); break;
+    case "ignore":    main.innerHTML = viewIgnore(data || []); attachIgnoreHandlers(); break;
   }
 }
 
@@ -204,7 +206,7 @@ function viewNetworks(rows) {
         <table class="dash-table">
           <thead><tr>
             <th>SSID</th><th>BSSID</th><th>CH</th>
-            <th>Signal</th><th>Security</th><th>Clients</th><th>Last Seen</th>
+            <th>Signal</th><th>Security</th><th>Clients</th><th>Last Seen</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.map(r => `
@@ -216,6 +218,7 @@ function viewNetworks(rows) {
                 <td>${secBadge(r.security)}</td>
                 <td>${r.clients ?? 0}</td>
                 <td class="rm-muted">${shortDate(r.last_seen)}</td>
+                <td><button class="rm-ignore-btn" data-bssid="${esc(r.bssid)}" title="Add to ignore list">Ignore</button></td>
               </tr>`).join("")}
           </tbody>
         </table>
@@ -485,6 +488,112 @@ function viewLog(rows) {
           </div>`).join("")}
       </div>
     </div>`;
+}
+
+// ── Ignore list ───────────────────────────────────────────────────────────────
+function viewIgnore(rows) {
+  return `
+    <div class="rm-action-bar">
+      <span class="rm-muted">${rows.length} BSSID${rows.length !== 1 ? "s" : ""} ignored</span>
+    </div>
+    <div class="dash-panel dash-panel-full">
+      <div class="dash-panel-header">
+        <h3>Add BSSID to Ignore List</h3>
+      </div>
+      <div class="rm-ignore-form">
+        <input class="rm-ignore-input rm-mono" id="rmIgnoreBssid"
+               placeholder="AA:BB:CC:DD:EE:FF" maxlength="17" spellcheck="false" />
+        <input class="rm-ignore-input" id="rmIgnoreNote"
+               placeholder="Note (optional, e.g. home router)" maxlength="80" />
+        <button class="rm-btn rm-btn-primary" id="rmIgnoreAddBtn">Add</button>
+      </div>
+    </div>
+    ${rows.length ? `
+    <div class="dash-panel dash-panel-full" style="margin-top:1rem">
+      <div class="dash-table-scroll">
+        <table class="dash-table">
+          <thead><tr><th>BSSID</th><th>Note</th><th>Added (UTC)</th><th></th></tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td class="rm-mono">${esc(r.bssid)}</td>
+                <td class="rm-muted">${esc(r.note || "—")}</td>
+                <td class="rm-muted">${(r.added || "").slice(0, 19).replace("T", " ")}</td>
+                <td><button class="rm-unignore-btn rm-crack-btn"
+                            data-bssid="${esc(r.bssid)}">Remove</button></td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>` : empty("", "No BSSIDs ignored yet")}`;
+}
+
+function attachIgnoreHandlers() {
+  // Add button in ignore view
+  const addBtn = document.getElementById("rmIgnoreAddBtn");
+  if (addBtn) {
+    addBtn.addEventListener("click", async () => {
+      const bssidEl = document.getElementById("rmIgnoreBssid");
+      const noteEl  = document.getElementById("rmIgnoreNote");
+      const bssid   = (bssidEl?.value || "").trim().toUpperCase();
+      if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(bssid)) {
+        bssidEl.style.borderColor = "var(--rm-red)";
+        bssidEl.focus();
+        return;
+      }
+      bssidEl.style.borderColor = "";
+      addBtn.textContent = "Adding…";
+      addBtn.disabled = true;
+      try {
+        await post("/api/ignore", { bssid, note: noteEl?.value || "" });
+        bssidEl.value = "";
+        if (noteEl) noteEl.value = "";
+        poll();
+      } catch (e) {
+        addBtn.textContent = "Error";
+      }
+      addBtn.textContent = "Add";
+      addBtn.disabled = false;
+    });
+  }
+
+  // Remove buttons in ignore view
+  document.querySelectorAll(".rm-unignore-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const bssid = btn.dataset.bssid;
+      btn.textContent = "Removing…";
+      btn.disabled = true;
+      try {
+        await del(`/api/ignore/${encodeURIComponent(bssid)}`);
+        poll();
+      } catch (e) {
+        btn.textContent = "Error";
+        btn.disabled = false;
+      }
+    });
+  });
+
+  // Ignore buttons in networks view
+  document.querySelectorAll(".rm-ignore-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const bssid = btn.dataset.bssid;
+      btn.textContent = "Ignoring…";
+      btn.disabled = true;
+      try {
+        await post("/api/ignore", { bssid, note: "" });
+        btn.textContent = "Ignored";
+        btn.classList.add("rm-ignored");
+      } catch (e) {
+        btn.textContent = "Error";
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+async function del(path) {
+  const r = await fetch(API + path, { method: "DELETE" });
+  return r.json();
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

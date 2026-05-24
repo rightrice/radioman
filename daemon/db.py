@@ -58,6 +58,12 @@ def init(path: str):
             message     TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS ignored_bssids (
+            bssid   TEXT PRIMARY KEY,
+            note    TEXT DEFAULT "",
+            added   TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_clients_bssid ON clients(bssid);
         CREATE INDEX IF NOT EXISTS idx_captures_bssid ON captures(bssid);
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
@@ -174,6 +180,39 @@ def get_events(path: str, limit: int = 50) -> list:
         "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def add_ignored(path: str, bssid: str, note: str = "") -> None:
+    now = datetime.utcnow().isoformat()
+    conn = get_conn(path)
+    conn.execute(
+        "INSERT OR IGNORE INTO ignored_bssids (bssid, note, added) VALUES (?, ?, ?)",
+        (bssid.upper().strip(), note.strip(), now),
+    )
+    conn.commit()
+
+
+def remove_ignored(path: str, bssid: str) -> bool:
+    conn = get_conn(path)
+    cur = conn.execute("DELETE FROM ignored_bssids WHERE bssid=?", (bssid.upper().strip(),))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def get_ignored(path: str) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT bssid, note, added FROM ignored_bssids ORDER BY added DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def is_ignored(path: str, bssid: str) -> bool:
+    conn = get_conn(path)
+    row = conn.execute(
+        "SELECT 1 FROM ignored_bssids WHERE bssid=?", (bssid.upper().strip(),)
+    ).fetchone()
+    return row is not None
 
 
 def get_graph(path: str) -> dict:
