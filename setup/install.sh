@@ -52,8 +52,7 @@ apt-get install -y -qq \
   fonts-dejavu-core \
   fonts-noto \
   fonts-noto-cjk \
-  fonts-noto-extra \
-  wordlists
+  fonts-noto-extra
 
 # ── hcxtools (PMKID extraction) ────────────────────────────────────────────────
 log "Installing hcxtools..."
