@@ -138,14 +138,25 @@ fi
 # ── Enable SPI, I2C, and USB gadget mode ──────────────────────────────────────
 log "Configuring boot options (SPI, I2C, USB gadget)..."
 
-CONFIG_FILE="/boot/firmware/config.txt"
-[ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
+# Use raspi-config to enable SPI and I2C — it knows the right config file
+# regardless of Pi OS version (Bullseye /boot vs Bookworm /boot/firmware)
+if command -v raspi-config &>/dev/null; then
+  raspi-config nonint do_spi 0 && log "SPI enabled via raspi-config" || warn "SPI enable failed"
+  raspi-config nonint do_i2c 0 && log "I2C enabled via raspi-config" || warn "I2C enable failed"
+else
+  warn "raspi-config not found — enabling SPI/I2C manually..."
+  CONFIG_FILE="/boot/firmware/config.txt"
+  [ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
+  grep -q "^dtparam=spi=on"     "$CONFIG_FILE" || echo "dtparam=spi=on"     >> "$CONFIG_FILE"
+  grep -q "^dtparam=i2c_arm=on" "$CONFIG_FILE" || echo "dtparam=i2c_arm=on" >> "$CONFIG_FILE"
+fi
+
+# USB gadget ethernet (SSH over USB data cable)
 CMDLINE_FILE="/boot/firmware/cmdline.txt"
 [ -f "/boot/cmdline.txt" ] && CMDLINE_FILE="/boot/cmdline.txt"
-
-grep -q "^dtparam=spi=on"     "$CONFIG_FILE" || echo "dtparam=spi=on"     >> "$CONFIG_FILE"
-grep -q "^dtparam=i2c_arm=on" "$CONFIG_FILE" || echo "dtparam=i2c_arm=on" >> "$CONFIG_FILE"
-grep -q "^dtoverlay=dwc2"     "$CONFIG_FILE" || echo "dtoverlay=dwc2"     >> "$CONFIG_FILE"
+CONFIG_FILE="/boot/firmware/config.txt"
+[ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
+grep -q "^dtoverlay=dwc2" "$CONFIG_FILE" || echo "dtoverlay=dwc2" >> "$CONFIG_FILE"
 
 if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
   sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
