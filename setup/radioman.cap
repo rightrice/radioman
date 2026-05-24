@@ -1,0 +1,20 @@
+# radioman.cap — bettercap caplet
+# Loaded by capture.py via bettercap REST API
+
+# Enable Wi-Fi recon
+set wifi.interface wlan0
+set wifi.show.sort clients desc
+
+# Hop all channels (2.4GHz and 5GHz)
+set wifi.hop.channels 1,2,3,4,5,6,7,8,9,10,11,36,40,44,48
+
+# Deauth settings — off by default, enable via API if needed
+# set wifi.deauth.skip aa:bb:cc:dd:ee:ff
+
+# Capture handshakes and PMKIDs to /opt/radioman/captures
+set wifi.handshakes.file /opt/radioman/captures/
+
+# Show events on stdout for logging
+set events.stream.output /tmp/bettercap-events.log
+
+wifi.recon on

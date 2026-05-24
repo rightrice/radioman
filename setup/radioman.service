@@ -1,0 +1,25 @@
+[Unit]
+Description=Radioman — Wi-Fi audit daemon
+After=network.target multi-user.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/radioman
+ExecStart=/opt/radioman/venv/bin/python3 /opt/radioman/radioman.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=radioman
+
+# Give bettercap and airmon-ng the raw socket access they need
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+
+Environment=PYTHONUNBUFFERED=1
+Environment=RADIOMAN_CONFIG=/opt/radioman/radioman.conf
+
+[Install]
+WantedBy=multi-user.target
