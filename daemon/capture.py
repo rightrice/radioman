@@ -59,13 +59,17 @@ class CaptureEngine:
         if not bc:
             log.warning("bettercap not found — capture disabled. Install with: sudo apt install bettercap")
             return
+        eval_cmds = (
+            f"api.rest.address {self._host}:{self._port}; "
+            f"api.rest.username {self._auth.username}; "
+            f"api.rest.password {self._auth.password}; "
+            "api.rest on"
+        )
         cmd = [
             bc,
             "-iface", self._iface,
             "-caplet", self._caplet,
-            "-api-address", f"{self._host}:{self._port}",
-            "-api-username", self._auth.username,
-            "-api-password", self._auth.password,
+            "-eval", eval_cmds,
             "-no-colors",
         ]
         log.info("Starting bettercap: %s", " ".join(cmd))

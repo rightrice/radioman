@@ -17,4 +17,7 @@ set wifi.handshakes.file /opt/radioman/captures/
 # Show events on stdout for logging
 set events.stream.output /tmp/bettercap-events.log
 
+# REST API — credentials and address set via -eval at startup
+api.rest on
+
 wifi.recon on
