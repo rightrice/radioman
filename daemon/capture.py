@@ -55,11 +55,36 @@ class CaptureEngine:
             log.debug("bettercap API %s %s: %s", method, path, e)
             return None
 
+    def _nm_release(self):
+        """Tell NetworkManager to stop managing the interface so bettercap can take over."""
+        if shutil.which("nmcli"):
+            try:
+                subprocess.run(
+                    ["nmcli", "device", "disconnect", self._iface],
+                    capture_output=True, timeout=5,
+                )
+                log.info("NetworkManager released %s", self._iface)
+            except Exception as e:
+                log.debug("nmcli disconnect: %s", e)
+
+    def _nm_reclaim(self):
+        """Hand the interface back to NetworkManager after scanning stops."""
+        if shutil.which("nmcli"):
+            try:
+                subprocess.run(
+                    ["nmcli", "device", "connect", self._iface],
+                    capture_output=True, timeout=10,
+                )
+                log.info("NetworkManager reclaimed %s", self._iface)
+            except Exception as e:
+                log.debug("nmcli connect: %s", e)
+
     def _start_bettercap(self):
         bc = shutil.which("bettercap")
         if not bc:
             log.warning("bettercap not found — capture disabled. Install with: sudo apt install bettercap")
             return
+        self._nm_release()
         cmd = [
             bc,
             "-iface", self._iface,
@@ -86,6 +111,7 @@ class CaptureEngine:
             except subprocess.TimeoutExpired:
                 self._proc.kill()
             self._proc = None
+        self._nm_reclaim()
 
     def _poll(self):
         data = self._bc("GET", "/api/session/wifi")

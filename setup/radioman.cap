@@ -1,7 +1,8 @@
 # radioman.cap — bettercap caplet
 
 # REST API
-set api.rest.address 127.0.0.1:8081
+set api.rest.address 127.0.0.1
+set api.rest.port 8081
 set api.rest.username user
 set api.rest.password pass
 api.rest on
