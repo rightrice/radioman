@@ -23,6 +23,7 @@ from capture import CaptureEngine
 from cracker import CrackQueue, CrackJob
 from scanner import NetworkScanner
 from xplt import XpltSync
+from ai import AIEngine
 from api import create_app
 
 logging.basicConfig(
@@ -69,7 +70,8 @@ class Radioman:
         self._disp_period = int(main_cfg.get("display_refresh", 5))
         self._pers_period = int(main_cfg.get("personality_interval", 30))
 
-        self._db_path = db_cfg.get("path", "/opt/radioman/radioman.db")
+        self._db_path     = db_cfg.get("path", "/opt/radioman/radioman.db")
+        self._rssi_hours  = int(db_cfg.get("rssi_history_hours", 24))
 
         log.info("Config: interface=%s  web_port=%d  db=%s",
                  self._iface, self._web_port, self._db_path)
@@ -89,6 +91,7 @@ class Radioman:
         capture_cfg["caplet"]      = os.path.join(BASE_DIR, "radioman.cap")
 
         self.xplt_sync   = XpltSync(xplt_cfg, self._db_path)
+        self.ai          = AIEngine(db_path=self._db_path)
         self.personality = PersonalityEngine()
         self.display     = Display(
             model=display_cfg.get("model", "epd2in13_V4"),
@@ -104,14 +107,16 @@ class Radioman:
         )
 
         self._state = {
-            "db_path":    self._db_path,
-            "conf_path":  self._conf_path,
+            "db_path":      self._db_path,
+            "conf_path":    self._conf_path,
+            "captures_dir": capture_cfg.get("captures_dir", "/opt/radioman/captures"),
             "personality": self.personality,
             "battery":    bat.read,
             "scanner":    self.scanner,
             "capture":    self.capture,
             "crack_queue": self.crack_queue,
             "xplt_sync":  self.xplt_sync,
+            "ai":         self.ai,
         }
 
         self._running = False
@@ -192,8 +197,8 @@ class Radioman:
                 # Clean up old RSSI history every ~10 minutes
                 Radioman._cleanup_counter += 1
                 if Radioman._cleanup_counter % max(1, 600 // self._pers_period) == 0:
-                    db.clean_rssi_history(self._db_path)
-                    log.debug("RSSI history cleaned")
+                    db.clean_rssi_history(self._db_path, hours=self._rssi_hours)
+                    log.debug("RSSI history cleaned (retention=%dh)", self._rssi_hours)
             except Exception as e:
                 log.error("Personality loop error: %s", e)
             time.sleep(self._pers_period)

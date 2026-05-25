@@ -47,6 +47,9 @@ hashcat_bin = hashcat
 [database]
 path = /opt/radioman/radioman.db
 
+# How many hours of per-AP RSSI history to keep (used for the signal graph in Stats)
+rssi_history_hours = 24
+
 [pisugar]
 # PiSugar 2 I2C address
 i2c_address = 0x75

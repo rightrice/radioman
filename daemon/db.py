@@ -332,7 +332,7 @@ def get_rssi_history(path: str, bssid: str, minutes: int = 60) -> list:
     return [dict(r) for r in rows]
 
 
-def clean_rssi_history(path: str, hours: int = 2) -> None:
+def clean_rssi_history(path: str, hours: int = 24) -> None:
     conn = get_conn(path)
     conn.execute(
         "DELETE FROM rssi_history WHERE ts < datetime('now', ?)",

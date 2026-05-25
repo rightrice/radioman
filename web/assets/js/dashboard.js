@@ -83,6 +83,8 @@ async function fetchViewData() {
     case "log":       return get("/api/events?limit=100");
     case "ignore":    return get("/api/ignore");
     case "stats":     return Promise.all([get("/api/networks"), get("/api/stats")]);
+    case "ai":        return get("/api/ai/status");
+    case "overview":  return Promise.all([get("/api/networks"), get("/api/events?limit=10")]);
     default:          return null;
   }
 }
@@ -108,7 +110,12 @@ function renderView() {
 function renderMain(status, data, xplt = null) {
   const main = document.getElementById("rmMain");
   switch (currentView) {
-    case "overview":  main.innerHTML = viewOverview(status, xplt); attachXpltHandler(); attachScanToggle(); break;
+    case "overview": {
+      const [recentNets, recentEvents] = Array.isArray(data) ? data : [[], []];
+      main.innerHTML = viewOverview(status, xplt, recentNets || [], recentEvents || []);
+      attachXpltHandler(); attachScanToggle();
+      break;
+    }
     case "networks":  main.innerHTML = viewNetworks(data || []); attachIgnoreHandlers(); break;
     case "clients":   main.innerHTML = viewClients(data || []); break;
     case "captures":  main.innerHTML = viewCaptures(data || []); attachCrackHandlers(); break;
@@ -123,11 +130,15 @@ function renderMain(status, data, xplt = null) {
       attachRssiClickHandlers();
       break;
     }
+    case "ai":
+      main.innerHTML = viewAI(data || {});
+      attachAIHandlers();
+      break;
   }
 }
 
 // ── Overview ──────────────────────────────────────────────────────────────────
-function viewOverview(status, xplt) {
+function viewOverview(status, xplt, recentNets = [], recentEvents = []) {
   const p       = status.personality || {};
   const b       = status.battery     || {};
   const s       = status.stats       || {};
@@ -172,36 +183,56 @@ function viewOverview(status, xplt) {
       </div>
     </div>
     <div class="dash-panels">
-      ${recentNetworksPanel()}
-      ${recentEventsPanel()}
+      ${recentNetworksPanel(recentNets)}
+      ${recentEventsPanel(recentEvents)}
     </div>
     ${xpltPanel(xplt)}`;
 }
 
-function recentNetworksPanel() {
+function recentNetworksPanel(nets = []) {
+  const top5 = nets.slice(0, 5);
+  const body = top5.length === 0
+    ? `<div class="dash-panel-body rm-empty"><div class="rm-empty-icon">📶</div><p>No networks yet</p></div>`
+    : `<table class="dash-table">
+        <thead><tr><th>SSID</th><th>CH</th><th>Signal</th><th>Security</th></tr></thead>
+        <tbody>
+          ${top5.map(r => `
+            <tr>
+              <td class="rm-table-ssid">${esc(r.ssid || "—")}</td>
+              <td>${r.channel ?? "—"}</td>
+              <td>${rssiCell(r.rssi)}</td>
+              <td>${secBadge(r.security)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
   return `
     <div class="dash-panel">
       <div class="dash-panel-header">
         <h3>Recent Networks</h3>
         <button class="rm-nav-btn" onclick="navigate('networks')">View all →</button>
       </div>
-      <div class="dash-panel-body rm-empty">
-        <div class="rm-empty-icon">📶</div>
-        <p>Loading…</p>
-      </div>
+      ${body}
     </div>`;
 }
-function recentEventsPanel() {
+
+function recentEventsPanel(events = []) {
+  const body = events.length === 0
+    ? `<div class="dash-panel-body rm-empty"><div class="rm-empty-icon">📋</div><p>No events yet</p></div>`
+    : `<div class="rm-log-list">
+        ${events.map(e => `
+          <div class="rm-log-row">
+            <span class="rm-log-ts rm-mono rm-muted">${shortDate(e.ts)}</span>
+            <span class="rm-log-level rm-log-level--${esc(e.level || "info")}">${esc(e.level || "")}</span>
+            <span class="rm-log-msg">${esc(e.message || "")}</span>
+          </div>`).join("")}
+      </div>`;
   return `
     <div class="dash-panel">
       <div class="dash-panel-header">
         <h3>Recent Events</h3>
         <button class="rm-nav-btn" onclick="navigate('log')">View all →</button>
       </div>
-      <div class="dash-panel-body rm-empty">
-        <div class="rm-empty-icon">📋</div>
-        <p>Loading…</p>
-      </div>
+      ${body}
     </div>`;
 }
 
@@ -437,21 +468,26 @@ function viewCaptures(rows) {
         <table class="dash-table">
           <thead><tr>
             <th>SSID</th><th>BSSID</th><th>Type</th>
-            <th>Captured</th><th>Status</th><th>Action</th>
+            <th>Captured</th><th>Status</th><th>Actions</th>
           </tr></thead>
           <tbody>
             ${rows.map(r => `
               <tr>
                 <td class="rm-table-ssid">${esc(r.ssid || "—")}</td>
                 <td class="rm-mono rm-table-bssid">${esc(r.bssid || "—")}</td>
-                <td>${esc(r.type || "—")}</td>
+                <td><span class="rm-cap-type">${esc(r.type || "—")}</span></td>
                 <td class="rm-muted">${shortDate(r.captured_at)}</td>
                 <td>${r.cracked
                   ? `<span class="rm-crack-badge-ok">✓ ${esc(r.password || "found")}</span>`
                   : `<span class="rm-muted">pending</span>`}</td>
-                <td>${!r.cracked
-                  ? `<button class="rm-crack-btn" data-id="${r.id}">Crack</button>`
-                  : ""}</td>
+                <td class="rm-cap-actions">
+                  ${!r.cracked
+                    ? `<button class="rm-crack-btn" data-id="${r.id}">Crack</button>`
+                    : ""}
+                  <a class="rm-btn rm-cap-dl-btn"
+                     href="/api/captures/${r.id}/download"
+                     download title="Download .pcapng">↓ pcapng</a>
+                </td>
               </tr>`).join("")}
           </tbody>
         </table>
@@ -1245,6 +1281,213 @@ function drawRssiLine(canvas, history) {
     const label = t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     ctx.fillText(label, mg.left + f * pW, mg.top + pH + 18);
   });
+}
+
+// ── AI view ───────────────────────────────────────────────────────────────────
+let aiHistory = [];  // [{role, content}]
+
+function viewAI(aiStatus) {
+  const ready  = aiStatus.ready;
+  const busy   = aiStatus.busy;
+  const model  = aiStatus.model  || "not installed";
+  const mb     = aiStatus.model_mb || 0;
+  const binary = aiStatus.binary;
+
+  const statusClass = ready ? "rm-ai-status-ok" : "rm-ai-status-off";
+  const statusLabel = busy ? "busy" : ready ? "ready" : "not installed";
+
+  const notInstalled = !binary || !aiStatus.model;
+  const installNote = notInstalled ? `
+    <div class="rm-ai-install-note">
+      <strong>AI not installed.</strong> Run on the Pi:<br>
+      <code>sudo bash setup/install_ai.sh</code><br>
+      <span class="rm-muted" style="font-size:0.8rem">
+        Downloads IBM Granite 1B (~400MB) and builds llama.cpp. Takes ~20 min on Pi Zero 2W.
+      </span>
+    </div>` : "";
+
+  return `
+    <div class="rm-ai-wrap">
+      <div class="rm-ai-header">
+        <div>
+          <h2 style="margin:0;font-size:1.1rem;font-weight:700">AI Assistant</h2>
+          <div class="rm-muted" style="font-size:0.8rem">IBM Granite 1B — runs locally on the Pi</div>
+        </div>
+        <div class="rm-ai-status-row">
+          <span class="rm-ai-status-dot ${statusClass}"></span>
+          <span class="rm-muted" style="font-size:0.8rem">${statusLabel}</span>
+          ${ready ? `<span class="rm-mono rm-muted" style="font-size:0.75rem">${esc(model)} · ${mb}MB</span>` : ""}
+        </div>
+      </div>
+
+      ${installNote}
+
+      <div class="rm-ai-quick-btns">
+        <button class="rm-btn rm-btn-primary rm-ai-analyze-btn" data-type="networks" ${ready && !busy ? "" : "disabled"}>
+          Analyze Networks
+        </button>
+        <button class="rm-btn rm-btn-primary rm-ai-analyze-btn" data-type="passwords" ${ready && !busy ? "" : "disabled"}>
+          Analyze Cracked Passwords
+        </button>
+        <button class="rm-btn rm-ai-clear-btn" title="Clear chat history">Clear</button>
+      </div>
+
+      <div class="rm-ai-chat" id="rmAiChat">
+        ${aiHistory.length === 0
+          ? `<div class="rm-ai-empty rm-muted">
+               Ask anything about your scan data, or use the quick-analyze buttons above.
+               <br><br>
+               <span style="font-size:0.78rem">Note: inference takes 1–3 minutes on the Pi Zero 2W.</span>
+             </div>`
+          : aiHistory.map(m => renderAIBubble(m.role, m.content)).join("")
+        }
+      </div>
+
+      <div class="rm-ai-input-row">
+        <textarea class="rm-ai-input" id="rmAiInput" rows="2"
+          placeholder="${ready ? "Ask about your networks, security risks, or passwords…" : "Install AI first to chat"}"
+          ${ready && !busy ? "" : "disabled"}></textarea>
+        <button class="rm-btn rm-btn-primary rm-ai-send" id="rmAiSendBtn"
+          ${ready && !busy ? "" : "disabled"}>Send</button>
+      </div>
+      <div class="rm-ai-thinking" id="rmAiThinking" style="display:none">
+        <span class="rm-spinner-sm"></span>
+        <span class="rm-muted" style="font-size:0.82rem">Thinking… this may take a minute or two on the Pi.</span>
+      </div>
+    </div>`;
+}
+
+function renderAIBubble(role, content) {
+  const cls = role === "assistant" ? "rm-ai-bubble-assistant" : "rm-ai-bubble-user";
+  const label = role === "assistant" ? "Granite" : "You";
+  return `<div class="rm-ai-bubble ${cls}">
+    <div class="rm-ai-bubble-label">${esc(label)}</div>
+    <div class="rm-ai-bubble-body">${esc(content)}</div>
+  </div>`;
+}
+
+function renderAIThinking(show) {
+  const el = document.getElementById("rmAiThinking");
+  if (el) el.style.display = show ? "flex" : "none";
+}
+
+function setAIInputsDisabled(disabled) {
+  document.querySelectorAll(".rm-ai-analyze-btn, #rmAiSendBtn, #rmAiInput").forEach(el => {
+    el.disabled = disabled;
+  });
+}
+
+function scrollAIChat() {
+  const chat = document.getElementById("rmAiChat");
+  if (chat) chat.scrollTop = chat.scrollHeight;
+}
+
+function appendAIBubble(role, content) {
+  const chat = document.getElementById("rmAiChat");
+  if (!chat) return;
+  // Remove empty-state message
+  const empty = chat.querySelector(".rm-ai-empty");
+  if (empty) empty.remove();
+  const div = document.createElement("div");
+  div.innerHTML = renderAIBubble(role, content);
+  chat.appendChild(div.firstElementChild);
+  scrollAIChat();
+}
+
+async function aiSend(messages) {
+  setAIInputsDisabled(true);
+  renderAIThinking(true);
+  try {
+    const result = await post("/api/ai/chat", { messages });
+    renderAIThinking(false);
+    if (result.error) {
+      appendAIBubble("assistant", `Error: ${result.error}`);
+      aiHistory.push({ role: "assistant", content: `Error: ${result.error}` });
+    } else {
+      const resp = result.response || "(no response)";
+      appendAIBubble("assistant", resp);
+      aiHistory.push({ role: "assistant", content: resp });
+    }
+    if (result.elapsed) {
+      const note = document.createElement("div");
+      note.className = "rm-ai-elapsed rm-muted";
+      note.textContent = `${result.elapsed}s`;
+      document.getElementById("rmAiChat")?.appendChild(note);
+    }
+  } catch (e) {
+    renderAIThinking(false);
+    appendAIBubble("assistant", "Network error — is radioman running?");
+  } finally {
+    setAIInputsDisabled(false);
+    scrollAIChat();
+  }
+}
+
+function attachAIHandlers() {
+  // Analyze buttons
+  document.querySelectorAll(".rm-ai-analyze-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const type = btn.dataset.type;
+      const label = type === "networks" ? "Analyze my scanned networks." : "Analyze my cracked passwords.";
+      aiHistory = [{ role: "user", content: label }];
+      appendAIBubble("user", label);
+
+      setAIInputsDisabled(true);
+      renderAIThinking(true);
+      try {
+        const result = await post("/api/ai/analyze", { type });
+        renderAIThinking(false);
+        const resp = result.response || result.error || "(no response)";
+        appendAIBubble("assistant", resp);
+        aiHistory.push({ role: "assistant", content: resp });
+        if (result.elapsed) {
+          const note = document.createElement("div");
+          note.className = "rm-ai-elapsed rm-muted";
+          note.textContent = `${result.elapsed}s`;
+          document.getElementById("rmAiChat")?.appendChild(note);
+        }
+      } catch (e) {
+        renderAIThinking(false);
+        appendAIBubble("assistant", "Request failed.");
+      } finally {
+        setAIInputsDisabled(false);
+        scrollAIChat();
+      }
+    });
+  });
+
+  // Clear button
+  document.querySelector(".rm-ai-clear-btn")?.addEventListener("click", () => {
+    aiHistory = [];
+    const chat = document.getElementById("rmAiChat");
+    if (chat) chat.innerHTML = `<div class="rm-ai-empty rm-muted">
+      Ask anything about your scan data, or use the quick-analyze buttons above.
+    </div>`;
+  });
+
+  // Send on button click
+  document.getElementById("rmAiSendBtn")?.addEventListener("click", () => sendUserMessage());
+
+  // Send on Ctrl+Enter / Cmd+Enter
+  document.getElementById("rmAiInput")?.addEventListener("keydown", e => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      sendUserMessage();
+    }
+  });
+
+  scrollAIChat();
+}
+
+function sendUserMessage() {
+  const input = document.getElementById("rmAiInput");
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  aiHistory.push({ role: "user", content: text });
+  appendAIBubble("user", text);
+  aiSend([...aiHistory]);
 }
 
 // ── Kick off ──────────────────────────────────────────────────────────────────

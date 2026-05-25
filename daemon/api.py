@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 
 log = logging.getLogger("api")
@@ -76,6 +76,31 @@ def create_app(state: dict) -> Flask:
     @app.route("/api/captures")
     def captures():
         return jsonify(_db.get_captures(_db_path()))
+
+    # ── Capture file download ─────────────────────────────────────────────────
+    @app.route("/api/captures/<int:capture_id>/download")
+    def capture_download(capture_id: int):
+        rows = [r for r in _db.get_captures(_db_path()) if r["id"] == capture_id]
+        if not rows:
+            return jsonify({"error": "not found"}), 404
+        filepath = rows[0].get("filename", "")
+        if not filepath or not os.path.isfile(filepath):
+            return jsonify({"error": "file not on disk"}), 404
+        # Restrict to the captures directory — no path traversal
+        captures_dir = os.path.realpath(
+            state.get("captures_dir", "/opt/radioman/captures")
+        )
+        real_path = os.path.realpath(filepath)
+        if not real_path.startswith(captures_dir + os.sep) and real_path != captures_dir:
+            log.warning("Download blocked outside captures dir: %s", filepath)
+            return jsonify({"error": "access denied"}), 403
+        log.info("Capture download: %s", os.path.basename(real_path))
+        return send_file(
+            real_path,
+            as_attachment=True,
+            download_name=os.path.basename(real_path),
+            mimetype="application/vnd.tcpdump.pcap",
+        )
 
     # ── Crack on demand ───────────────────────────────────────────────────────
     @app.route("/api/crack/<int:capture_id>", methods=["POST"])
@@ -233,5 +258,53 @@ def create_app(state: dict) -> Flask:
             return jsonify({"error": "empty command"}), 400
         ok = state["capture"].send_cmd(command)
         return jsonify({"sent": ok, "cmd": command})
+
+    # ── AI (local llama.cpp inference) ───────────────────────────────────────
+    @app.route("/api/ai/status")
+    def ai_status():
+        return jsonify(state["ai"].status())
+
+    @app.route("/api/ai/chat", methods=["POST"])
+    def ai_chat():
+        if not request.is_json:
+            return jsonify({"error": "expected JSON"}), 400
+        data     = request.json or {}
+        messages = data.get("messages", [])
+        if not isinstance(messages, list) or not messages:
+            return jsonify({"error": "messages array required"}), 400
+        # Sanitize: only allow role/content keys, truncate content
+        clean = []
+        for m in messages[-12:]:
+            role    = str(m.get("role", "user"))[:16]
+            content = str(m.get("content", ""))[:2000]
+            if role in ("user", "assistant") and content:
+                clean.append({"role": role, "content": content})
+        if not clean:
+            return jsonify({"error": "no valid messages"}), 400
+        log.info("AI chat: %d messages", len(clean))
+        result = state["ai"].chat(clean)
+        if result.get("busy"):
+            return jsonify(result), 429
+        return jsonify(result)
+
+    @app.route("/api/ai/analyze", methods=["POST"])
+    def ai_analyze():
+        if not request.is_json:
+            return jsonify({"error": "expected JSON"}), 400
+        kind = str(request.json.get("type", "")).strip()
+        if kind == "networks":
+            networks = _db.get_networks(_db_path())
+            log.info("AI analyze: networks (%d)", len(networks))
+            result = state["ai"].analyze_networks(networks)
+        elif kind == "passwords":
+            captures = _db.get_captures(_db_path())
+            cracked  = [c["password"] for c in captures if c.get("password")]
+            log.info("AI analyze: passwords (%d cracked)", len(cracked))
+            result = state["ai"].analyze_passwords(cracked)
+        else:
+            return jsonify({"error": "type must be 'networks' or 'passwords'"}), 400
+        if result.get("busy"):
+            return jsonify(result), 429
+        return jsonify(result)
 
     return app
