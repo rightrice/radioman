@@ -82,6 +82,7 @@ async function fetchViewData() {
     case "hosts":     return get("/api/hosts");
     case "log":       return get("/api/events?limit=100");
     case "ignore":    return get("/api/ignore");
+    case "stats":     return Promise.all([get("/api/networks"), get("/api/stats")]);
     default:          return null;
   }
 }
@@ -108,13 +109,20 @@ function renderMain(status, data, xplt = null) {
   const main = document.getElementById("rmMain");
   switch (currentView) {
     case "overview":  main.innerHTML = viewOverview(status, xplt); attachXpltHandler(); attachScanToggle(); break;
-    case "networks":  main.innerHTML = viewNetworks(data || []); break;
+    case "networks":  main.innerHTML = viewNetworks(data || []); attachIgnoreHandlers(); break;
     case "clients":   main.innerHTML = viewClients(data || []); break;
     case "captures":  main.innerHTML = viewCaptures(data || []); attachCrackHandlers(); break;
     case "graph":     main.innerHTML = viewGraph(); drawGraph(data || { nodes: [], edges: [] }); break;
     case "hosts":     main.innerHTML = viewHosts(data || [], status); attachScanHandler(); break;
     case "log":       main.innerHTML = viewLog(data || []); break;
     case "ignore":    main.innerHTML = viewIgnore(data || []); attachIgnoreHandlers(); break;
+    case "stats": {
+      const [networks, statsData] = Array.isArray(data) ? data : [[], {}];
+      main.innerHTML = viewStats(networks || []);
+      drawAllCharts(networks || [], statsData || {});
+      attachRssiClickHandlers();
+      break;
+    }
   }
 }
 
@@ -816,6 +824,427 @@ function navigate(view) {
     b.classList.toggle("active", b.dataset.view === view);
   });
   renderView();
+}
+
+// ── Stats view ────────────────────────────────────────────────────────────────
+
+const CHART_COLORS = [
+  "#5ee1c8","#fbbf24","#a78bfa","#f472b6","#34d399",
+  "#60a5fa","#fb923c","#e879f9","#4ade80","#f87171",
+  "#38bdf8","#facc15",
+];
+
+const SEC_COLORS = {
+  WPA3: "#34d399", WPA2: "#5ee1c8", WPA: "#fbbf24",
+  WEP: "#f87171", OPEN: "#fb923c", UNKNOWN: "#64748b",
+};
+
+function viewStats(networks) {
+  const total = networks.length;
+  const has24  = networks.some(n => n.channel >= 1  && n.channel <= 14);
+  const has5   = networks.some(n => n.channel >= 36);
+  return `
+    <div class="rm-action-bar">
+      <span class="rm-muted">${total} network${total !== 1 ? "s" : ""} in database</span>
+      <span class="rm-muted rm-mono" style="font-size:0.72rem">click a row in Networks to see RSSI history</span>
+    </div>
+    <div class="rm-stats-grid">
+      ${has24 ? `
+      <div class="dash-panel rm-chart-panel rm-chart-full" id="rmChartChannel24Wrap">
+        <div class="dash-panel-header"><h3>2.4 GHz Channel Analyzer</h3>
+          <span class="rm-muted" style="font-size:0.72rem">WiFiman-style — curves show signal per AP</span>
+        </div>
+        <div class="rm-chart-wrap">
+          <canvas id="rmChannelChart24" class="rm-chart-canvas rm-chart-tall"></canvas>
+          <div class="rm-chart-legend" id="rmChannelLegend24"></div>
+        </div>
+      </div>` : ""}
+      ${has5 ? `
+      <div class="dash-panel rm-chart-panel rm-chart-full">
+        <div class="dash-panel-header"><h3>5 GHz Channel Analyzer</h3></div>
+        <div class="rm-chart-wrap">
+          <canvas id="rmChannelChart5" class="rm-chart-canvas rm-chart-tall"></canvas>
+          <div class="rm-chart-legend" id="rmChannelLegend5"></div>
+        </div>
+      </div>` : ""}
+      <div class="dash-panel rm-chart-panel">
+        <div class="dash-panel-header"><h3>Security Breakdown</h3></div>
+        <div class="rm-chart-wrap">
+          <canvas id="rmSecChart" class="rm-chart-canvas"></canvas>
+          <div class="rm-chart-legend" id="rmSecLegend"></div>
+        </div>
+      </div>
+      <div class="dash-panel rm-chart-panel">
+        <div class="dash-panel-header"><h3>Signal Distribution</h3></div>
+        <div class="rm-chart-wrap">
+          <canvas id="rmRssiChart" class="rm-chart-canvas"></canvas>
+        </div>
+      </div>
+      <div class="dash-panel rm-chart-panel rm-chart-full">
+        <div class="dash-panel-header"><h3>Top Vendors</h3></div>
+        <div class="rm-chart-wrap">
+          <canvas id="rmVendorChart" class="rm-chart-canvas"></canvas>
+        </div>
+      </div>
+    </div>`;
+}
+
+function drawAllCharts(networks, statsData) {
+  const theme   = getTheme();
+  const isDark  = theme === "dark";
+  const textClr = isDark ? "#94a3b8" : "#475569";
+  const lineClr = isDark ? "rgba(148,163,184,0.12)" : "rgba(15,23,42,0.08)";
+
+  const ctx24  = document.getElementById("rmChannelChart24");
+  const ctx5   = document.getElementById("rmChannelChart5");
+  const ctxSec = document.getElementById("rmSecChart");
+  const ctxRss = document.getElementById("rmRssiChart");
+  const ctxVnd = document.getElementById("rmVendorChart");
+
+  const nets24 = networks.filter(n => n.channel >= 1  && n.channel <= 14);
+  const nets5  = networks.filter(n => n.channel >= 36);
+
+  if (ctx24 && nets24.length) drawChannelChart(ctx24, nets24, 1, 13, textClr, lineClr, "rmChannelLegend24");
+  if (ctx5  && nets5.length)  drawChannelChart(ctx5,  nets5,  36, 165, textClr, lineClr, "rmChannelLegend5");
+  if (ctxSec) drawDonutChart(ctxSec, statsData.security || {}, textClr);
+  if (ctxRss) drawRssiHistogram(ctxRss, networks, textClr, lineClr);
+  if (ctxVnd) drawVendorChart(ctxVnd, statsData.vendors || [], textClr);
+}
+
+function _fitCanvas(canvas) {
+  const W = canvas.offsetWidth  || 600;
+  const H = canvas.offsetHeight || 220;
+  canvas.width  = W;
+  canvas.height = H;
+  return { W, H, ctx: canvas.getContext("2d") };
+}
+
+// WiFiman-style channel chart: Gaussian arches per AP
+function drawChannelChart(canvas, networks, chMin, chMax, textClr, lineClr, legendId) {
+  const { W, H, ctx } = _fitCanvas(canvas);
+  const mg = { top: 16, right: 16, bottom: 36, left: 44 };
+  const pW = W - mg.left - mg.right;
+  const pH = H - mg.top  - mg.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  function chX(ch) { return mg.left + ((ch - chMin) / (chMax - chMin)) * pW; }
+  function rssiY(rssi) {
+    const norm = Math.max(0, Math.min(1, (rssi + 100) / 70));
+    return mg.top + pH - norm * pH;
+  }
+
+  // Grid lines at RSSI -40, -60, -80
+  ctx.strokeStyle = lineClr;
+  ctx.lineWidth   = 1;
+  [-40, -60, -80].forEach(r => {
+    const y = rssiY(r);
+    ctx.beginPath(); ctx.moveTo(mg.left, y); ctx.lineTo(mg.left + pW, y); ctx.stroke();
+    ctx.fillStyle  = textClr;
+    ctx.font       = "10px ui-monospace,monospace";
+    ctx.textAlign  = "right";
+    ctx.fillText(`${r}`, mg.left - 6, y + 4);
+  });
+
+  // Baseline
+  ctx.strokeStyle = lineClr;
+  ctx.beginPath(); ctx.moveTo(mg.left, mg.top + pH); ctx.lineTo(mg.left + pW, mg.top + pH); ctx.stroke();
+
+  // Channel labels on X axis
+  const channelStep = chMax - chMin <= 14 ? 1 : 4;
+  for (let ch = chMin; ch <= chMax; ch += channelStep) {
+    const x = chX(ch);
+    ctx.fillStyle = textClr;
+    ctx.font      = "10px ui-monospace,monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(String(ch), x, mg.top + pH + 16);
+  }
+
+  // Gaussian arch per network
+  const sigma = chMax <= 14 ? 1.5 : 3;
+  const legendEl = document.getElementById(legendId);
+  if (legendEl) legendEl.innerHTML = "";
+
+  networks.forEach((net, i) => {
+    const color = CHART_COLORS[i % CHART_COLORS.length];
+    const amp   = Math.max(0.05, Math.min(1, (net.rssi + 100) / 70));
+
+    ctx.beginPath();
+    let first = true;
+    for (let px = mg.left; px <= mg.left + pW; px++) {
+      const ch = chMin + ((px - mg.left) / pW) * (chMax - chMin);
+      const g  = amp * Math.exp(-0.5 * Math.pow((ch - net.channel) / sigma, 2));
+      const y  = mg.top + pH - g * pH;
+      first ? ctx.moveTo(px, y) : ctx.lineTo(px, y);
+      first = false;
+    }
+    ctx.lineTo(mg.left + pW, mg.top + pH);
+    ctx.lineTo(mg.left,      mg.top + pH);
+    ctx.closePath();
+    ctx.fillStyle   = color + "30";
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = 1.5;
+    ctx.stroke();
+
+    // Channel center dot
+    const cx = chX(net.channel);
+    const cy = rssiY(net.rssi);
+    ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+    ctx.fillStyle = color; ctx.fill();
+
+    if (legendEl) {
+      const item = document.createElement("span");
+      item.className = "rm-chart-legend-item";
+      item.title = `${net.ssid || net.bssid}  ch${net.channel}  ${net.rssi}dBm`;
+      item.innerHTML = `<span class="rm-chart-swatch" style="background:${color}"></span>${esc(net.ssid || net.bssid)}`;
+      legendEl.appendChild(item);
+    }
+  });
+}
+
+// Security donut chart
+function drawDonutChart(canvas, secData, textClr) {
+  const { W, H, ctx } = _fitCanvas(canvas);
+  const cx = W / 2, cy = H / 2;
+  const outerR = Math.min(W, H) * 0.38;
+  const innerR = outerR * 0.58;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const entries = Object.entries(secData).filter(([, v]) => v > 0);
+  const total   = entries.reduce((s, [, v]) => s + v, 0);
+
+  if (!total) {
+    ctx.fillStyle = textClr; ctx.font = "13px ui-monospace,monospace";
+    ctx.textAlign = "center"; ctx.fillText("No data", cx, cy);
+    return;
+  }
+
+  let angle = -Math.PI / 2;
+  entries.forEach(([key, count]) => {
+    const sweep = (count / total) * Math.PI * 2;
+    const color = SEC_COLORS[key.toUpperCase()] || SEC_COLORS.UNKNOWN;
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerR, angle, angle + sweep);
+    ctx.arc(cx, cy, innerR, angle + sweep, angle, true);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    angle += sweep;
+  });
+
+  // Center label
+  ctx.fillStyle = textClr;
+  ctx.font = `bold ${Math.round(outerR * 0.5)}px ui-monospace,monospace`;
+  ctx.textAlign = "center";
+  ctx.fillText(String(total), cx, cy + 6);
+  ctx.font = `${Math.round(outerR * 0.22)}px ui-monospace,monospace`;
+  ctx.fillStyle = textClr + "99";
+  ctx.fillText("networks", cx, cy + outerR * 0.42);
+
+  // Legend to the right
+  const lx = cx + outerR + 16;
+  let ly = cy - (entries.length * 18) / 2;
+  entries.forEach(([key, count]) => {
+    const color = SEC_COLORS[key.toUpperCase()] || SEC_COLORS.UNKNOWN;
+    ctx.fillStyle = color;
+    ctx.fillRect(lx, ly - 7, 10, 10);
+    ctx.fillStyle = textClr;
+    ctx.font = "10px ui-monospace,monospace";
+    ctx.textAlign = "left";
+    ctx.fillText(`${key}  ${count}`, lx + 14, ly + 3);
+    ly += 18;
+  });
+}
+
+// RSSI distribution histogram
+function drawRssiHistogram(canvas, networks, textClr, lineClr) {
+  const { W, H, ctx } = _fitCanvas(canvas);
+  const mg = { top: 16, right: 16, bottom: 36, left: 44 };
+  const pW = W - mg.left - mg.right;
+  const pH = H - mg.top  - mg.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Bins: -30 to -100, 10dBm each
+  const bins = [-30,-40,-50,-60,-70,-80,-90,-100];
+  const counts = new Array(bins.length).fill(0);
+  networks.forEach(n => {
+    const r = n.rssi ?? -100;
+    const i = Math.min(counts.length - 1, Math.max(0, Math.floor((-30 - r) / 10)));
+    counts[i]++;
+  });
+
+  const maxCount = Math.max(1, ...counts);
+  const barW = pW / counts.length;
+
+  // Grid
+  ctx.strokeStyle = lineClr; ctx.lineWidth = 1;
+  [0.25, 0.5, 0.75, 1].forEach(f => {
+    const y = mg.top + pH - f * pH;
+    ctx.beginPath(); ctx.moveTo(mg.left, y); ctx.lineTo(mg.left + pW, y); ctx.stroke();
+    ctx.fillStyle = textClr; ctx.font = "10px ui-monospace,monospace"; ctx.textAlign = "right";
+    ctx.fillText(Math.round(f * maxCount), mg.left - 6, y + 4);
+  });
+
+  counts.forEach((cnt, i) => {
+    const norm  = cnt / maxCount;
+    const x     = mg.left + i * barW + barW * 0.1;
+    const bw    = barW * 0.8;
+    const bh    = norm * pH;
+    const y     = mg.top + pH - bh;
+
+    // Color gradient: strong signal = green, weak = red
+    const t     = 1 - i / (counts.length - 1);
+    const r     = Math.round(248 * (1 - t) + 52  * t);
+    const g     = Math.round(113 * (1 - t) + 211 * t);
+    const b     = Math.round(113 * (1 - t) + 153 * t);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(x, y, bw, bh);
+
+    // Label
+    ctx.fillStyle = textClr; ctx.font = "9px ui-monospace,monospace"; ctx.textAlign = "center";
+    ctx.fillText(`${bins[i]}`, x + bw / 2, mg.top + pH + 16);
+    if (cnt) ctx.fillText(String(cnt), x + bw / 2, y - 3);
+  });
+
+  // Axis label
+  ctx.fillStyle = textClr + "88"; ctx.font = "9px ui-monospace,monospace"; ctx.textAlign = "center";
+  ctx.fillText("dBm", mg.left + pW / 2, mg.top + pH + 30);
+}
+
+// Vendor horizontal bar chart
+function drawVendorChart(canvas, vendors, textClr) {
+  const { W, H, ctx } = _fitCanvas(canvas);
+  if (!vendors.length) {
+    ctx.fillStyle = textClr; ctx.font = "13px ui-monospace,monospace";
+    ctx.textAlign = "center"; ctx.fillText("No vendor data", W / 2, H / 2);
+    return;
+  }
+  const mg    = { top: 12, right: 24, bottom: 12, left: 140 };
+  const pW    = W - mg.left - mg.right;
+  const pH    = H - mg.top  - mg.bottom;
+  const rows  = vendors.slice(0, 10);
+  const barH  = Math.min(22, pH / rows.length - 4);
+  const maxC  = Math.max(1, rows[0].count);
+
+  ctx.clearRect(0, 0, W, H);
+
+  rows.forEach((v, i) => {
+    const y     = mg.top + i * (pH / rows.length);
+    const bw    = (v.count / maxC) * pW;
+    const color = CHART_COLORS[i % CHART_COLORS.length];
+
+    ctx.fillStyle = color + "40";
+    ctx.fillRect(mg.left, y + 2, bw, barH);
+    ctx.fillStyle = color;
+    ctx.fillRect(mg.left, y + 2, 3, barH);
+
+    ctx.fillStyle = textClr; ctx.font = "10px ui-monospace,monospace";
+    ctx.textAlign = "right";
+    ctx.fillText((v.vendor || "Unknown").slice(0, 18), mg.left - 6, y + barH / 2 + 4);
+
+    ctx.textAlign = "left";
+    ctx.fillText(String(v.count), mg.left + bw + 5, y + barH / 2 + 4);
+  });
+}
+
+// RSSI history modal (shown when clicking a network row)
+function attachRssiClickHandlers() {
+  document.querySelectorAll(".rm-rssi-row-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const bssid = btn.dataset.bssid;
+      const ssid  = btn.dataset.ssid || bssid;
+      await showRssiModal(bssid, ssid);
+    });
+  });
+}
+
+async function showRssiModal(bssid, ssid) {
+  let modal = document.getElementById("rmRssiModal");
+  if (modal) modal.remove();
+
+  modal = document.createElement("div");
+  modal.id        = "rmRssiModal";
+  modal.className = "rm-rssi-modal";
+  modal.innerHTML = `
+    <div class="rm-rssi-modal-inner">
+      <div class="rm-rssi-modal-header">
+        <h3>RSSI History — ${esc(ssid)}</h3>
+        <button class="rm-rssi-close" id="rmRssiCloseBtn">✕</button>
+      </div>
+      <canvas id="rmRssiHistCanvas" style="width:100%;height:200px;display:block"></canvas>
+      <div class="rm-muted" id="rmRssiHistNote" style="font-size:0.72rem;margin-top:0.5rem;text-align:center">
+        Loading…
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  document.getElementById("rmRssiCloseBtn").addEventListener("click", () => modal.remove());
+  modal.addEventListener("click", e => { if (e.target === modal) modal.remove(); });
+
+  try {
+    const history = await get(`/api/stats/rssi_history/${encodeURIComponent(bssid)}?minutes=60`);
+    const note = document.getElementById("rmRssiHistNote");
+    if (!history.length) { note.textContent = "No RSSI history yet — starts recording once scanning begins."; return; }
+    note.textContent = `${history.length} samples over last 60 minutes`;
+    drawRssiLine(document.getElementById("rmRssiHistCanvas"), history);
+  } catch (e) {
+    const note = document.getElementById("rmRssiHistNote");
+    if (note) note.textContent = "Failed to load RSSI history.";
+  }
+}
+
+function drawRssiLine(canvas, history) {
+  const { W, H, ctx } = _fitCanvas(canvas);
+  const mg = { top: 16, right: 16, bottom: 28, left: 44 };
+  const pW = W - mg.left - mg.right;
+  const pH = H - mg.top  - mg.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const isDark = getTheme() === "dark";
+  const textClr = isDark ? "#94a3b8" : "#475569";
+  const lineClr = isDark ? "rgba(148,163,184,0.12)" : "rgba(15,23,42,0.08)";
+
+  const vals  = history.map(p => p.rssi);
+  const times = history.map(p => new Date(p.ts + "Z").getTime());
+  const minT  = times[0], maxT = times[times.length - 1] || minT + 1;
+  const minR  = Math.min(-90, ...vals), maxR = Math.max(-20, ...vals);
+
+  function tx(t) { return mg.left + ((t - minT) / (maxT - minT || 1)) * pW; }
+  function ry(r) { return mg.top + pH - ((r - minR) / (maxR - minR || 1)) * pH; }
+
+  // Grid
+  [-30,-50,-70,-90].forEach(r => {
+    if (r < minR || r > maxR) return;
+    ctx.strokeStyle = lineClr; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(mg.left, ry(r)); ctx.lineTo(mg.left + pW, ry(r)); ctx.stroke();
+    ctx.fillStyle = textClr; ctx.font = "9px ui-monospace,monospace"; ctx.textAlign = "right";
+    ctx.fillText(`${r}`, mg.left - 4, ry(r) + 3);
+  });
+
+  // Line
+  ctx.beginPath();
+  history.forEach((p, i) => {
+    const x = tx(times[i]), y = ry(p.rssi);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = "#5ee1c8"; ctx.lineWidth = 2; ctx.stroke();
+
+  // Fill under line
+  ctx.lineTo(tx(times[times.length - 1]), mg.top + pH);
+  ctx.lineTo(tx(times[0]),                mg.top + pH);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(94,225,200,0.12)"; ctx.fill();
+
+  // Time labels
+  ctx.fillStyle = textClr; ctx.font = "9px ui-monospace,monospace"; ctx.textAlign = "center";
+  [0, 0.5, 1].forEach(f => {
+    const t = new Date(minT + f * (maxT - minT));
+    const label = t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    ctx.fillText(label, mg.left + f * pW, mg.top + pH + 18);
+  });
 }
 
 // ── Kick off ──────────────────────────────────────────────────────────────────

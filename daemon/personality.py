@@ -1,8 +1,11 @@
+import logging
 import time
 import random
 import threading
 from dataclasses import dataclass, field
 from typing import Optional
+
+log = logging.getLogger("personality")
 
 FACES = {
     "happy":      ["(^‿^)", "(^ᵕ^)", "(◕‿◕)"],
@@ -112,9 +115,12 @@ class PersonalityEngine:
     def _set_mood(self, mood: str):
         if mood not in FACES:
             mood = "default"
-        self.state.mood = mood
-        self.state.face = random.choice(FACES[mood])
+        prev = self.state.mood
+        self.state.mood    = mood
+        self.state.face    = random.choice(FACES[mood])
         self.state.message = random.choice(MESSAGES[mood])
+        if prev != mood:
+            log.info("Mood: %s → %s  \"%s\"", prev, mood, self.state.message)
 
     def snapshot(self) -> dict:
         with self.state._lock:

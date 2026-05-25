@@ -39,6 +39,11 @@ def create_app(state: dict) -> Flask:
     def assets(path):
         return send_from_directory(os.path.join(os.path.abspath(WEB_DIR), "assets"), path)
 
+    @app.after_request
+    def _log_request(resp):
+        log.debug("%s %s → %d", request.method, request.path, resp.status_code)
+        return resp
+
     # ── Status ────────────────────────────────────────────────────────────────
     @app.route("/api/status")
     def status():
@@ -200,6 +205,23 @@ def create_app(state: dict) -> Flask:
         state["capture"].stop_scan()
         _db.log_event(_db_path(), "info", "Scan stopped")
         return jsonify({"scanning": False})
+
+    # ── Stats (channel / security / vendor / RSSI history) ───────────────────
+    @app.route("/api/stats")
+    def stats_overview():
+        return jsonify({
+            "channels": _db.get_channel_stats(_db_path()),
+            "security": _db.get_security_stats(_db_path()),
+            "vendors":  _db.get_vendor_stats(_db_path()),
+        })
+
+    @app.route("/api/stats/rssi_history/<bssid>")
+    def stats_rssi_history(bssid: str):
+        try:
+            minutes = min(int(request.args.get("minutes", 60)), 1440)
+        except (ValueError, TypeError):
+            minutes = 60
+        return jsonify(_db.get_rssi_history(_db_path(), bssid, minutes))
 
     # ── bettercap pass-through commands ───────────────────────────────────────
     @app.route("/api/cmd", methods=["POST"])

@@ -196,12 +196,12 @@ def _draw_ghost(draw: "ImageDraw.ImageDraw", ox: int, oy: int, mood: str):
 
     # Ghost body — filled black dome + rectangle
     draw.ellipse([ox+2,  oy+6,  ox+55, oy+46], fill=0)
-    draw.rectangle([ox+2, oy+26, ox+55, oy+74], fill=0)
+    draw.rectangle([ox+2, oy+26, ox+55, oy+76], fill=0)
 
-    # Wavy bottom — white half-circle cutouts
-    draw.ellipse([ox+1,  oy+60, ox+21, oy+80], fill=255)
-    draw.ellipse([ox+19, oy+60, ox+39, oy+80], fill=0)
-    draw.ellipse([ox+37, oy+60, ox+57, oy+80], fill=255)
+    # Wavy bottom — 3 white scallops with 2px black peaks between them
+    draw.ellipse([ox+1,  oy+60, ox+18, oy+88], fill=255)
+    draw.ellipse([ox+20, oy+60, ox+37, oy+88], fill=255)
+    draw.ellipse([ox+39, oy+60, ox+56, oy+88], fill=255)
 
     # Eyes — white ovals
     draw.ellipse([ox+9,  oy+18, ox+26, oy+36], fill=255)

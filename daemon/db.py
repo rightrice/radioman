@@ -64,9 +64,17 @@ def init(path: str):
             added   TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS rssi_history (
+            id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            bssid TEXT NOT NULL,
+            rssi  INTEGER,
+            ts    TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_clients_bssid ON clients(bssid);
         CREATE INDEX IF NOT EXISTS idx_captures_bssid ON captures(bssid);
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+        CREATE INDEX IF NOT EXISTS idx_rssi_bssid_ts ON rssi_history(bssid, ts);
     """)
     # Add xplt_synced tracking columns to existing tables (safe on re-run)
     for col_sql in [
@@ -95,6 +103,10 @@ def upsert_network(path: str, bssid: str, ssid: str, channel: int,
             security=excluded.security,
             last_seen=excluded.last_seen
     """, (bssid, ssid, channel, rssi, security, vendor, now, now))
+    conn.execute(
+        "INSERT INTO rssi_history (bssid, rssi, ts) VALUES (?, ?, ?)",
+        (bssid, rssi, now),
+    )
     conn.commit()
 
 
@@ -281,6 +293,52 @@ def is_ignored(path: str, bssid: str) -> bool:
         "SELECT 1 FROM ignored_bssids WHERE bssid=?", (bssid.upper().strip(),)
     ).fetchone()
     return row is not None
+
+
+def get_channel_stats(path: str) -> dict:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT channel, COUNT(*) AS cnt FROM networks WHERE channel IS NOT NULL GROUP BY channel ORDER BY channel"
+    ).fetchall()
+    return {row["channel"]: row["cnt"] for row in rows}
+
+
+def get_security_stats(path: str) -> dict:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT security, COUNT(*) AS cnt FROM networks GROUP BY security ORDER BY cnt DESC"
+    ).fetchall()
+    return {row["security"]: row["cnt"] for row in rows}
+
+
+def get_vendor_stats(path: str, limit: int = 12) -> list:
+    conn = get_conn(path)
+    rows = conn.execute("""
+        SELECT vendor, COUNT(*) AS cnt
+        FROM (SELECT vendor FROM networks WHERE vendor != ''
+              UNION ALL
+              SELECT vendor FROM clients  WHERE vendor != '')
+        GROUP BY vendor ORDER BY cnt DESC LIMIT ?
+    """, (limit,)).fetchall()
+    return [{"vendor": row["vendor"], "count": row["cnt"]} for row in rows]
+
+
+def get_rssi_history(path: str, bssid: str, minutes: int = 60) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT ts, rssi FROM rssi_history WHERE bssid=? AND ts > datetime('now', ?) ORDER BY ts",
+        (bssid.upper(), f"-{minutes} minutes"),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def clean_rssi_history(path: str, hours: int = 2) -> None:
+    conn = get_conn(path)
+    conn.execute(
+        "DELETE FROM rssi_history WHERE ts < datetime('now', ?)",
+        (f"-{hours} hours",),
+    )
+    conn.commit()
 
 
 def get_graph(path: str) -> dict:

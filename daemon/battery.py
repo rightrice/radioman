@@ -56,6 +56,7 @@ def read() -> dict:
     """
     result = _read_i2c_direct()
     if result["source"] != "unavailable":
+        log.debug("Battery (i2c): %d%%  charging=%s", result["percent"], result["charging"])
         return result
 
     resp = _pisugar_cmd("get battery")
@@ -64,10 +65,12 @@ def read() -> dict:
             pct = float(resp.split(":")[-1].strip().replace("%", ""))
             charging_resp = _pisugar_cmd("get battery_charging")
             charging = "true" in charging_resp.lower()
+            log.debug("Battery (pisugar): %d%%  charging=%s", int(pct), charging)
             return {"percent": int(pct), "charging": charging, "source": "pisugar"}
         except Exception:
             pass
 
+    log.debug("Battery unavailable (no I2C device and no pisugar-server)")
     return result
 
 

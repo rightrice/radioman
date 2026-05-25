@@ -222,15 +222,7 @@ log "Creating Python virtual environment..."
 python3 -m venv --system-site-packages "$RADIOMAN_DIR/venv"
 "$RADIOMAN_DIR/venv/bin/pip" install --quiet --upgrade pip
 
-"$RADIOMAN_DIR/venv/bin/pip" install --quiet \
-  flask \
-  flask-cors \
-  pillow \
-  smbus2 \
-  requests \
-  spidev \
-  gpiozero \
-  lgpio
+"$RADIOMAN_DIR/venv/bin/pip" install --quiet -r "$SCRIPT_DIR/requirements.txt"
 
 log "Python dependencies installed"
 

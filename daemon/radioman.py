@@ -70,6 +70,19 @@ class Radioman:
         self._pers_period = int(main_cfg.get("personality_interval", 30))
 
         self._db_path = db_cfg.get("path", "/opt/radioman/radioman.db")
+
+        log.info("Config: interface=%s  web_port=%d  db=%s",
+                 self._iface, self._web_port, self._db_path)
+        log.info("Config: display=%s rotate=%s  refresh=%ds",
+                 display_cfg.get("model", "epd2in13_V4"),
+                 display_cfg.get("rotate", 180),
+                 self._disp_period)
+        log.info("Config: wordlist=%s  max_jobs=%s",
+                 crack_cfg.get("wordlist", "/opt/radioman/wordlists/rockyou.txt"),
+                 crack_cfg.get("max_jobs", 1))
+        log.info("Config: XPLT token %s",
+                 "present" if xplt_cfg.get("device_token") else "not set (sync disabled)")
+
         db.init(self._db_path)
 
         capture_cfg["interface"]   = self._iface
@@ -107,21 +120,27 @@ class Radioman:
 
     def _on_network(self, bssid, ssid, channel, rssi, security, vendor):
         if db.is_ignored(self._db_path, bssid):
+            log.debug("Ignored AP: %s (%s)", bssid, ssid)
             return
         db.upsert_network(self._db_path, bssid, ssid, channel, rssi, security, vendor)
-        db.log_event(self._db_path, "info", f"AP: {ssid or bssid} ch{channel} {security}")
+        log.debug("AP: %-17s  ch%-3d  %4ddBm  %-6s  %s  [%s]",
+                  bssid, channel, rssi, security, ssid or "(hidden)", vendor or "?")
+        db.log_event(self._db_path, "info", f"AP: {ssid or bssid} ch{channel} {rssi}dBm {security}")
         self.personality.on_new_network()
 
     def _on_client(self, mac, bssid, rssi, vendor):
         if bssid and db.is_ignored(self._db_path, bssid):
             return
         db.upsert_client(self._db_path, mac, bssid, rssi, vendor)
+        log.debug("Client: %s → %s  %ddBm  [%s]", mac, bssid or "probe", rssi, vendor or "?")
 
     def _on_capture(self, filepath, bssid, ssid, cap_type):
         if bssid and db.is_ignored(self._db_path, bssid):
             log.info("Skipping capture for ignored BSSID %s", bssid)
             return
         cap_id = db.insert_capture(self._db_path, filepath, bssid, ssid, cap_type)
+        log.info("Capture #%d: %s [%s] bssid=%s  file=%s",
+                 cap_id, ssid or "(hidden)", cap_type, bssid, filepath)
         db.log_event(self._db_path, "capture",
                      f"Captured {cap_type}: {ssid or bssid}")
         self.personality.on_capture(ssid)
@@ -131,6 +150,8 @@ class Radioman:
 
     def _on_cracked(self, capture_id, password):
         db.mark_cracked(self._db_path, capture_id, password)
+        masked = password[:2] + "*" * max(0, len(password) - 2)
+        log.info("CRACKED capture #%d → %s (%d chars)", capture_id, masked, len(password))
         db.log_event(self._db_path, "cracked", f"Cracked capture #{capture_id}: {password}")
         self.personality.on_crack(password=password)
         self.xplt_sync.sync_now()
@@ -149,6 +170,8 @@ class Radioman:
                 log.error("Display loop error: %s", e)
             time.sleep(self._disp_period)
 
+    _cleanup_counter = 0
+
     def _personality_loop(self):
         while self._running:
             try:
@@ -161,6 +184,16 @@ class Radioman:
                 batt_pct = batt.get("percent", -1)
                 if 0 <= batt_pct < 15:
                     self.personality.on_low_battery(batt_pct)
+                log.debug("Tick: mood=%s  batt=%s%%(%s)  nets=%d  caps=%d  cracked=%d",
+                          self.personality.snapshot().get("mood"),
+                          batt_pct, "chg" if batt.get("charging") else "dis",
+                          stats.get("networks", 0), stats.get("captures", 0),
+                          stats.get("cracked", 0))
+                # Clean up old RSSI history every ~10 minutes
+                Radioman._cleanup_counter += 1
+                if Radioman._cleanup_counter % max(1, 600 // self._pers_period) == 0:
+                    db.clean_rssi_history(self._db_path)
+                    log.debug("RSSI history cleaned")
             except Exception as e:
                 log.error("Personality loop error: %s", e)
             time.sleep(self._pers_period)

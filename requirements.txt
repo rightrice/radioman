@@ -1,0 +1,8 @@
+flask
+flask-cors
+pillow
+smbus2
+requests
+spidev
+gpiozero
+lgpio

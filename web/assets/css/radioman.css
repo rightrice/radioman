@@ -670,6 +670,89 @@ body { background: #08111f; }
 }
 .rm-xplt-row > span:first-child { min-width: 100px; }
 
+/* ── Stats view ──────────────────────────────────────────────── */
+.rm-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.rm-chart-panel { display: flex; flex-direction: column; }
+.rm-chart-panel.rm-chart-full { grid-column: 1 / -1; }
+.rm-chart-wrap { padding: 1rem 1.25rem 1.25rem; flex: 1; }
+
+.rm-chart-canvas {
+  width: 100%;
+  height: 220px;
+  display: block;
+  border-radius: 8px;
+}
+.rm-chart-canvas.rm-chart-tall { height: 280px; }
+
+.rm-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-top: 0.75rem;
+  font-size: 0.72rem;
+  color: var(--aap-muted);
+}
+.rm-chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rm-chart-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.rm-rssi-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.rm-rssi-modal-inner {
+  background: var(--aap-surface);
+  border: 1px solid var(--aap-line);
+  border-radius: 20px;
+  padding: 1.5rem;
+  width: 100%;
+  max-width: 640px;
+}
+.rm-rssi-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+.rm-rssi-modal-header h3 { margin: 0; font-size: 0.9rem; font-weight: 700; }
+.rm-rssi-close {
+  background: none;
+  border: none;
+  color: var(--aap-muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  line-height: 1;
+}
+
+@media (max-width: 900px) {
+  .rm-stats-grid { grid-template-columns: 1fr; }
+}
+
 /* ── Light mode overrides ───────────────────────────────────── */
 .aap-portfolio[data-aap-theme="light"] body { background: #f5f8fc; }
 .aap-portfolio[data-aap-theme="light"] .rm-face-card,
