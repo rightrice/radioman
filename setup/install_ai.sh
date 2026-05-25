@@ -42,26 +42,32 @@ mkdir -p "$LLAMA_DIR" "$MODEL_DIR"
 if [ -f "$LLAMA_BIN" ]; then
   info "llama-cli already present at $LLAMA_BIN"
 else
-  log "Fetching latest llama.cpp release info..."
+  log "Fetching latest llama.cpp release tag..."
 
-  RELEASE_JSON=$(curl -sf "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest" || echo "")
-  if [ -z "$RELEASE_JSON" ]; then
-    err "Could not reach GitHub API — check internet connection"
+  # Follow the redirect on /releases/latest to get the tag — no API key or JSON parsing needed
+  LATEST_URL=$(curl -sf -o /dev/null -w "%{url_effective}" -L \
+    "https://github.com/ggerganov/llama.cpp/releases/latest" 2>/dev/null || echo "")
+  RELEASE_TAG=$(basename "$LATEST_URL")
+
+  if [ -z "$RELEASE_TAG" ] || [ "$RELEASE_TAG" = "latest" ]; then
+    err "Could not determine latest llama.cpp release — check internet connection"
   fi
 
-  RELEASE_TAG=$(echo "$RELEASE_JSON" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
   info "Latest release: $RELEASE_TAG"
 
-  # Asset name pattern for Linux ARM64 (matches ubuntu-arm64 and linux-arm64 variants)
-  ASSET_URL=$(echo "$RELEASE_JSON" \
-    | grep '"browser_download_url"' \
-    | grep -i "linux-arm64\|ubuntu-arm64" \
-    | grep "\.zip" \
-    | head -1 \
-    | cut -d'"' -f4)
+  # Construct the ARM64 asset URL directly from the tag.
+  # llama.cpp names the asset: llama-{tag}-bin-ubuntu-arm64.zip
+  ASSET_URL="https://github.com/ggerganov/llama.cpp/releases/download/${RELEASE_TAG}/llama-${RELEASE_TAG}-bin-ubuntu-arm64.zip"
 
-  if [ -z "$ASSET_URL" ]; then
-    err "No ARM64 binary found in release $RELEASE_TAG — check https://github.com/ggerganov/llama.cpp/releases"
+  # Verify the asset exists before downloading
+  HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" -L "$ASSET_URL" 2>/dev/null || echo "000")
+  if [ "$HTTP_STATUS" != "200" ]; then
+    # Try linux-arm64 variant (used in some release series)
+    ASSET_URL="https://github.com/ggerganov/llama.cpp/releases/download/${RELEASE_TAG}/llama-${RELEASE_TAG}-bin-linux-arm64.zip"
+    HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" -L "$ASSET_URL" 2>/dev/null || echo "000")
+    if [ "$HTTP_STATUS" != "200" ]; then
+      err "No ARM64 binary found for release $RELEASE_TAG — check https://github.com/ggerganov/llama.cpp/releases"
+    fi
   fi
 
   info "Downloading: $(basename "$ASSET_URL")"
