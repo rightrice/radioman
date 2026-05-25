@@ -82,6 +82,41 @@ update_dir() {
   fi
 }
 
+# ── Swap + zram ────────────────────────────────────────────────────────────────
+log "Swap / zram..."
+
+DPHYS_CONF="/etc/dphys-swapfile"
+if [ -f "$DPHYS_CONF" ]; then
+  CURRENT_SWAP=$(grep "^CONF_SWAPSIZE=" "$DPHYS_CONF" | cut -d= -f2 || echo "0")
+  if [ "${CURRENT_SWAP}" -lt 2048 ] 2>/dev/null; then
+    sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' "$DPHYS_CONF"
+    sed -i 's/^#*CONF_MAXSWAP=.*/CONF_MAXSWAP=2048/' "$DPHYS_CONF"
+    dphys-swapfile swapoff 2>/dev/null || true
+    dphys-swapfile setup
+    dphys-swapfile swapon
+    change "swap: expanded to 2GB (was ${CURRENT_SWAP}MB)"
+  else
+    same "swap: ${CURRENT_SWAP}MB"
+  fi
+fi
+
+ZRAM_CONF="/etc/default/zramswap"
+ZRAM_WANT=$'ALGO=lz4\nPERCENT=50'
+if ! command -v zramctl &>/dev/null || [ ! -f "$ZRAM_CONF" ]; then
+  apt-get install -y -qq zram-tools
+  printf '%s\n' "$ZRAM_WANT" > "$ZRAM_CONF"
+  systemctl enable zramswap 2>/dev/null || true
+  systemctl restart zramswap 2>/dev/null || true
+  change "zram: installed and enabled (lz4, 50%)"
+elif ! grep -q "ALGO=lz4" "$ZRAM_CONF" || ! grep -q "PERCENT=50" "$ZRAM_CONF"; then
+  printf '%s\n' "$ZRAM_WANT" > "$ZRAM_CONF"
+  systemctl restart zramswap 2>/dev/null || true
+  change "zram: config updated"
+else
+  same "zram: lz4 50%"
+fi
+echo ""
+
 # ── Boot config (dwc2 gadget mode + g_ether) ──────────────────────────────────
 log "Boot config..."
 
