@@ -28,6 +28,7 @@ same()   { echo -e "  ${BLUE}·${NC} $1 (unchanged)"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CHANGED=false
+REBOOT_NEEDED=false
 
 echo ""
 log "Checking for updates..."
@@ -80,6 +81,67 @@ update_dir() {
     same "$label"
   fi
 }
+
+# ── Boot config (dwc2 gadget mode + g_ether) ──────────────────────────────────
+log "Boot config..."
+
+CONFIG_FILE="/boot/firmware/config.txt"
+[ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
+CMDLINE_FILE="/boot/firmware/cmdline.txt"
+[ -f "/boot/cmdline.txt" ] && CMDLINE_FILE="/boot/cmdline.txt"
+
+# Ensure boot partition is mounted
+if ! mountpoint -q /boot/firmware 2>/dev/null; then
+  mount /boot/firmware 2>/dev/null || true
+fi
+
+# Fix dwc2 — delete any existing dtoverlay=dwc2 line (catches dr_mode=host variant)
+# and append the correct bare form.
+if grep -q "dtoverlay=dwc2,dr_mode=host" "$CONFIG_FILE" 2>/dev/null; then
+  sed -i '/^dtoverlay=dwc2/d' "$CONFIG_FILE"
+  echo "dtoverlay=dwc2" >> "$CONFIG_FILE"
+  change "config.txt: fixed dtoverlay=dwc2 (removed dr_mode=host)"
+  REBOOT_NEEDED=true
+elif ! grep -q "^dtoverlay=dwc2$" "$CONFIG_FILE" 2>/dev/null; then
+  sed -i '/^dtoverlay=dwc2/d' "$CONFIG_FILE"
+  echo "dtoverlay=dwc2" >> "$CONFIG_FILE"
+  change "config.txt: added dtoverlay=dwc2"
+  REBOOT_NEEDED=true
+else
+  same "config.txt: dtoverlay=dwc2"
+fi
+
+# Fix cmdline.txt — add modules-load=dwc2,g_ether if missing
+if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE" 2>/dev/null; then
+  if grep -q "rootwait" "$CMDLINE_FILE"; then
+    sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
+  elif grep -q "console=" "$CMDLINE_FILE"; then
+    sed -i 's/console=/modules-load=dwc2,g_ether console=/' "$CMDLINE_FILE"
+  else
+    sed -i '1s/$/ modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
+  fi
+  if grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
+    change "cmdline.txt: added modules-load=dwc2,g_ether"
+    REBOOT_NEEDED=true
+  else
+    warn "cmdline.txt: could not add g_ether — edit $CMDLINE_FILE manually"
+  fi
+else
+  same "cmdline.txt: modules-load=dwc2,g_ether"
+fi
+
+# Ensure usb0 NM profile exists
+if ! nmcli connection show usb-gadget &>/dev/null; then
+  nmcli connection add \
+    type ethernet ifname usb0 con-name "usb-gadget" \
+    ipv4.method manual ipv4.addresses "10.55.0.1/24" \
+    ipv6.method disabled connection.autoconnect yes 2>/dev/null && \
+    change "NetworkManager: usb-gadget profile created (10.55.0.1)" || \
+    warn "NetworkManager: could not create usb-gadget profile"
+else
+  same "NetworkManager: usb-gadget profile"
+fi
+echo ""
 
 # ── Daemon Python files ────────────────────────────────────────────────────────
 log "Daemon files..."
@@ -168,6 +230,13 @@ log "━━━━━━━━━━━━━━━━━━━━━━━━━
 log " Update complete"
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-info "Logs: journalctl -u radioman -f"
+info "Logs:      journalctl -u radioman -f"
 info "Dashboard: http://radioman.local:8080"
+if $REBOOT_NEEDED; then
+  echo ""
+  warn "REBOOT REQUIRED — boot config changed (USB gadget / SPI / I2C)."
+  warn "Run: sudo reboot"
+  warn "After reboot, set your Mac USB interface to 10.55.0.2 / 255.255.255.0"
+  warn "then SSH: ssh pi@10.55.0.1"
+fi
 echo ""

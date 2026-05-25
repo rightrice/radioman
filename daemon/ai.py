@@ -19,8 +19,8 @@ log = logging.getLogger("ai")
 LLAMA_CLI  = os.environ.get("LLAMA_CLI",  "/opt/radioman/llama/llama-cli")
 MODEL_PATH = os.environ.get("RADIOMAN_MODEL", "/opt/radioman/models/granite.gguf")
 
-N_PREDICT = 300
-CTX_SIZE  = 1024   # increased to fit system prompt + live context + conversation
+N_PREDICT = 400
+CTX_SIZE  = 1024   # system prompt + live context + conversation
 THREADS   = 4
 TIMEOUT   = 240    # Pi Zero 2W — 4 minutes max
 
@@ -99,14 +99,15 @@ def _live_context(db_path: Optional[str]) -> str:
     try:
         import db as _db
         stats    = _db.get_stats(db_path)
-        sec      = _db.get_security_stats(db_path)   # {security: count}
-        ch       = _db.get_channel_stats(db_path)    # {channel: count}
-        events   = _db.get_events(db_path, limit=5)  # recent log lines
+        sec      = _db.get_security_stats(db_path)
+        ch       = _db.get_channel_stats(db_path)
+        events   = _db.get_events(db_path, limit=5)
+        captures = _db.get_captures(db_path)
 
-        nets     = stats.get("networks", 0)
-        clients  = stats.get("clients",  0)
-        caps     = stats.get("captures", 0)
-        cracked  = stats.get("cracked",  0)
+        nets    = stats.get("networks", 0)
+        clients = stats.get("clients",  0)
+        caps    = stats.get("captures", 0)
+        cracked = stats.get("cracked",  0)
 
         # Security mix (top 4 by count)
         sec_str = ", ".join(
@@ -120,7 +121,16 @@ def _live_context(db_path: Optional[str]) -> str:
             for k, v in sorted(ch.items(), key=lambda x: x[1], reverse=True)[:4]
         ) if ch else "none"
 
-        # Recent events (trim to 80 chars each)
+        # Capture summary — which networks have captures and which are cracked
+        cap_lines = []
+        for c in captures[:8]:
+            ssid   = (c.get("ssid") or c.get("bssid") or "?")[:24]
+            ctype  = c.get("type", "?")
+            status = f"CRACKED: {c['password'][:3]}***" if c.get("cracked") and c.get("password") else "pending"
+            cap_lines.append(f"  {ssid} [{ctype}] {status}")
+        cap_str = "\n".join(cap_lines) or "  none"
+
+        # Recent events
         ev_lines = "\n".join(
             f"  [{e.get('level','?')}] {str(e.get('message',''))[:80]}"
             for e in (events or [])[:5]
@@ -128,9 +138,10 @@ def _live_context(db_path: Optional[str]) -> str:
 
         return (
             f"\nRADIOMAN LIVE STATE:\n"
-            f"- Networks: {nets} | Clients: {clients} | Captures: {caps} | Cracked: {cracked}\n"
+            f"- Networks seen: {nets} | Clients: {clients} | Captures: {caps} | Cracked: {cracked}\n"
             f"- Security mix: {sec_str}\n"
-            f"- Active channels: {ch_str}\n"
+            f"- Busiest channels: {ch_str}\n"
+            f"- Captures:\n{cap_str}\n"
             f"- Recent events:\n{ev_lines}"
         )
     except Exception as e:
@@ -259,27 +270,46 @@ class AIEngine:
             self._busy = False
             self._lock.release()
 
-    def analyze_networks(self, networks: list) -> dict:
+    def analyze_networks(self, networks: list, captures: Optional[list] = None) -> dict:
         if not networks:
             return {"error": "No networks to analyze"}
+
+        # Build a set of BSSIDs that have captures, and which are cracked
+        captured_bssids = {}
+        if captures:
+            for c in captures:
+                bssid = (c.get("bssid") or "").upper()
+                if bssid:
+                    captured_bssids[bssid] = "cracked" if c.get("cracked") else "captured"
+
         top   = sorted(networks, key=lambda n: n.get("rssi", -100), reverse=True)[:20]
         lines = []
         for n in top:
-            ssid   = (n.get("ssid") or "(hidden)")[:28]
-            sec    = n.get("security", "?")
-            ch     = n.get("channel", 0)
-            rssi   = n.get("rssi", 0)
-            vendor = (n.get("vendor") or "")[:20]
-            wps    = " [WPS]" if n.get("wps") else ""
-            lines.append(f"{ssid} | {sec}{wps} | ch{ch} | {rssi}dBm | {vendor}")
+            ssid     = (n.get("ssid") or "(hidden)")[:24]
+            sec      = n.get("security", "?")
+            ch       = n.get("channel", 0)
+            rssi     = n.get("rssi", 0)
+            vendor   = (n.get("vendor") or "unknown")[:18]
+            clients  = n.get("clients", 0)
+            wps      = "[WPS]" if n.get("wps") else ""
+            bssid    = (n.get("bssid") or "").upper()
+            cap_flag = f"[{captured_bssids[bssid]}]" if bssid in captured_bssids else ""
+            lines.append(
+                f"{ssid} | {sec} {wps}{cap_flag} | ch{ch} | {rssi}dBm"
+                f" | {vendor} | {clients} client{'s' if clients != 1 else ''}"
+            )
         summary = "\n".join(lines)
+
         messages = [{
             "role": "user",
             "content": (
-                f"Analyze these {len(networks)} scanned Wi-Fi networks "
-                f"(top {len(lines)} by signal strength):\n\n{summary}\n\n"
-                "Flag: open networks, WEP, WPS-enabled, weak vendor defaults, "
-                "unusual channel use, hidden SSIDs. Rank by risk. Be concise."
+                f"Analyze these {len(networks)} Wi-Fi networks "
+                f"(top {len(lines)} shown, sorted by signal). "
+                f"[captured] = handshake/PMKID already taken. [cracked] = password known.\n\n"
+                f"{summary}\n\n"
+                "Flag in order of risk: open networks, WEP, WPS, weak vendor defaults, "
+                "high client counts (juicy targets), hidden SSIDs, channel congestion. "
+                "Note which already have captures. Recommend next actions."
             ),
         }]
         return self.chat(messages)
@@ -289,14 +319,16 @@ class AIEngine:
             return {"error": "No cracked passwords to analyze"}
         sample = cracked[:12]
         items  = ", ".join(repr(p) for p in sample)
+        total  = len(cracked)
         messages = [{
             "role": "user",
             "content": (
-                f"Analyze these {len(cracked)} cracked Wi-Fi passwords for patterns: {items}\n\n"
-                "Identify: password pattern types (keyboard walk, year, dictionary word, "
-                "default router pattern, etc.), estimated crack time categories, "
-                "and 2-3 concrete recommendations for users in this area. "
-                "Do not repeat passwords verbatim in your response."
+                f"{total} Wi-Fi password{'s' if total != 1 else ''} cracked in this area. "
+                f"Sample ({len(sample)}): {items}\n\n"
+                "For each pattern type found (keyboard walk, year suffix, dictionary word, "
+                "name+digits, router default, etc.) estimate what % of the sample it represents. "
+                "Give 2-3 specific security recommendations relevant to this neighborhood's "
+                "password habits. Do not repeat passwords verbatim."
             ),
         }]
         return self.chat(messages)

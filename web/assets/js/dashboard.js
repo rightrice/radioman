@@ -635,7 +635,7 @@ function drawGraph(data) {
 }
 
 // ── LAN Hosts ─────────────────────────────────────────────────────────────────
-function viewHosts(rows, status) {
+function viewHosts(rows, _status) {
   return `
     <div class="rm-action-bar">
       <span class="rm-muted">${rows.length} host${rows.length !== 1 ? "s" : ""} in ARP table</span>
@@ -1284,7 +1284,27 @@ function drawRssiLine(canvas, history) {
 }
 
 // ── AI view ───────────────────────────────────────────────────────────────────
-let aiHistory = [];  // [{role, content}]
+const AI_HISTORY_KEY = "rm-ai-history";
+const AI_HISTORY_MAX = 20;  // max turns to persist
+
+function aiHistoryLoad() {
+  try {
+    const raw = localStorage.getItem(AI_HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+function aiHistorySave(history) {
+  try {
+    // Keep last N turns to avoid localStorage bloat
+    const trimmed = history.slice(-AI_HISTORY_MAX);
+    localStorage.setItem(AI_HISTORY_KEY, JSON.stringify(trimmed));
+  } catch { /* storage full — ignore */ }
+}
+function aiHistoryClear() {
+  localStorage.removeItem(AI_HISTORY_KEY);
+}
+
+let aiHistory = aiHistoryLoad();
 
 function viewAI(aiStatus) {
   const ready  = aiStatus.ready;
@@ -1408,6 +1428,7 @@ async function aiSend(messages) {
       appendAIBubble("assistant", resp);
       aiHistory.push({ role: "assistant", content: resp });
     }
+    aiHistorySave(aiHistory);
     if (result.elapsed) {
       const note = document.createElement("div");
       note.className = "rm-ai-elapsed rm-muted";
@@ -1440,6 +1461,7 @@ function attachAIHandlers() {
         const resp = result.response || result.error || "(no response)";
         appendAIBubble("assistant", resp);
         aiHistory.push({ role: "assistant", content: resp });
+        aiHistorySave(aiHistory);
         if (result.elapsed) {
           const note = document.createElement("div");
           note.className = "rm-ai-elapsed rm-muted";
@@ -1459,6 +1481,7 @@ function attachAIHandlers() {
   // Clear button
   document.querySelector(".rm-ai-clear-btn")?.addEventListener("click", () => {
     aiHistory = [];
+    aiHistoryClear();
     const chat = document.getElementById("rmAiChat");
     if (chat) chat.innerHTML = `<div class="rm-ai-empty rm-muted">
       Ask anything about your scan data, or use the quick-analyze buttons above.
@@ -1486,6 +1509,7 @@ function sendUserMessage() {
   if (!text) return;
   input.value = "";
   aiHistory.push({ role: "user", content: text });
+  aiHistorySave(aiHistory);
   appendAIBubble("user", text);
   aiSend([...aiHistory]);
 }

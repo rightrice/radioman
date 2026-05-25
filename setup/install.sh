@@ -166,20 +166,32 @@ log "SPI and I2C enabled in $CONFIG_FILE"
 CMDLINE_FILE="/boot/firmware/cmdline.txt"
 [ -f "/boot/cmdline.txt" ] && CMDLINE_FILE="/boot/cmdline.txt"
 
-# Ensure dwc2 is present and not forced into host mode (host mode disables gadget/USB-SSH)
-if grep -q "^dtoverlay=dwc2,dr_mode=host" "$CONFIG_FILE"; then
-  sed -i 's/^dtoverlay=dwc2,dr_mode=host.*/dtoverlay=dwc2/' "$CONFIG_FILE"
-elif ! grep -q "^dtoverlay=dwc2" "$CONFIG_FILE"; then
-  echo "dtoverlay=dwc2" >> "$CONFIG_FILE"
+# Ensure dwc2 is present and NOT forced into host mode.
+# Pi Imager sometimes writes dtoverlay=dwc2,dr_mode=host which disables gadget mode.
+# Strip any dtoverlay=dwc2 line entirely, then append the correct one.
+sed -i '/^dtoverlay=dwc2/d' "$CONFIG_FILE"
+echo "dtoverlay=dwc2" >> "$CONFIG_FILE"
+log "dtoverlay=dwc2 set in $CONFIG_FILE"
+
+# Add g_ether to modules-load in cmdline.txt.
+# cmdline.txt is a single line — try anchoring on rootwait, then console=, then just append.
+if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
+  if grep -q "rootwait" "$CMDLINE_FILE"; then
+    sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
+  elif grep -q "console=" "$CMDLINE_FILE"; then
+    # Prepend to the line as a fallback anchor
+    sed -i 's/console=/modules-load=dwc2,g_ether console=/' "$CMDLINE_FILE"
+  else
+    # Last resort — append to end of line
+    sed -i '1s/$/ modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
+  fi
 fi
 
-if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
-  sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
-  if grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
-    log "USB gadget ethernet enabled — SSH via USB cable after reboot"
-  else
-    warn "cmdline.txt modification failed — USB SSH may not work. Check $CMDLINE_FILE manually."
-  fi
+if grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
+  log "USB gadget ethernet enabled (modules-load=dwc2,g_ether in $CMDLINE_FILE)"
+else
+  warn "Could not add g_ether to $CMDLINE_FILE — edit it manually:"
+  warn "  Add:  modules-load=dwc2,g_ether  anywhere in the single line"
 fi
 
 # Configure usb0 with a static IP so SSH over USB works without DHCP

@@ -61,30 +61,36 @@ else
   cmake -B "$TMP/llama.cpp/build" \
     -S "$TMP/llama.cpp" \
     -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
     -DLLAMA_BUILD_SERVER=OFF \
     -DLLAMA_BUILD_TESTS=OFF \
     -DLLAMA_BUILD_EXAMPLES=ON \
     -DCMAKE_C_FLAGS="-O2" \
     -DCMAKE_CXX_FLAGS="-O2" \
     -DGGML_NATIVE=OFF \
-    -DGGML_AVX=OFF \
-    -DGGML_AVX2=OFF \
-    --log-level=WARNING \
     2>/dev/null
 
+  # Build all default targets — target name varies across llama.cpp versions
   cmake --build "$TMP/llama.cpp/build" \
     --config Release \
-    --target llama-cli \
     -j2 \
-    2>&1 | grep -v "^--\|^\[" | tail -20
+    2>&1 | grep -v "^\[" | tail -30
 
-  if [ ! -f "$TMP/llama.cpp/build/bin/llama-cli" ]; then
-    err "Build failed — llama-cli binary not found"
+  # Find the binary wherever cmake put it (location varies by version)
+  LLAMA_BIN_BUILT=$(find "$TMP/llama.cpp/build" -name "llama-cli" -type f 2>/dev/null | head -1)
+
+  if [ -z "$LLAMA_BIN_BUILT" ]; then
+    # Older llama.cpp used 'main' as the CLI binary name
+    LLAMA_BIN_BUILT=$(find "$TMP/llama.cpp/build" -name "main" -type f 2>/dev/null | head -1)
   fi
 
-  cp "$TMP/llama.cpp/build/bin/llama-cli" "$LLAMA_BIN"
+  if [ -z "$LLAMA_BIN_BUILT" ]; then
+    err "Build failed — could not find llama-cli or main binary under build/"
+  fi
+
+  cp "$LLAMA_BIN_BUILT" "$LLAMA_BIN"
   chmod +x "$LLAMA_BIN"
-  log "llama-cli installed to $LLAMA_BIN"
+  log "llama-cli installed to $LLAMA_BIN (from $LLAMA_BIN_BUILT)"
 fi
 
 # ── Download IBM Granite GGUF model ───────────────────────────────────────────

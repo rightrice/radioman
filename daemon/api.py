@@ -294,8 +294,9 @@ def create_app(state: dict) -> Flask:
         kind = str(request.json.get("type", "")).strip()
         if kind == "networks":
             networks = _db.get_networks(_db_path())
-            log.info("AI analyze: networks (%d)", len(networks))
-            result = state["ai"].analyze_networks(networks)
+            captures = _db.get_captures(_db_path())
+            log.info("AI analyze: networks (%d) captures (%d)", len(networks), len(captures))
+            result = state["ai"].analyze_networks(networks, captures)
         elif kind == "passwords":
             captures = _db.get_captures(_db_path())
             cracked  = [c["password"] for c in captures if c.get("password")]
