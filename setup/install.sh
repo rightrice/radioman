@@ -132,15 +132,19 @@ log "Configuring boot options (SPI, I2C, USB gadget)..."
 CONFIG_FILE="/boot/firmware/config.txt"
 [ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
 
-# Enable SPI — change dtparam=spi=off → on, or append if absent
-if grep -q "^dtparam=spi" "$CONFIG_FILE"; then
+# Enable SPI — uncomment if commented, replace if set to off, append if absent
+if grep -q "^#dtparam=spi=" "$CONFIG_FILE"; then
+  sed -i 's/^#dtparam=spi=.*/dtparam=spi=on/' "$CONFIG_FILE"
+elif grep -q "^dtparam=spi=" "$CONFIG_FILE"; then
   sed -i 's/^dtparam=spi=.*/dtparam=spi=on/' "$CONFIG_FILE"
 else
   echo "dtparam=spi=on" >> "$CONFIG_FILE"
 fi
 
-# Enable I2C — same pattern
-if grep -q "^dtparam=i2c_arm" "$CONFIG_FILE"; then
+# Enable I2C — same three-way pattern
+if grep -q "^#dtparam=i2c_arm=" "$CONFIG_FILE"; then
+  sed -i 's/^#dtparam=i2c_arm=.*/dtparam=i2c_arm=on/' "$CONFIG_FILE"
+elif grep -q "^dtparam=i2c_arm=" "$CONFIG_FILE"; then
   sed -i 's/^dtparam=i2c_arm=.*/dtparam=i2c_arm=on/' "$CONFIG_FILE"
 else
   echo "dtparam=i2c_arm=on" >> "$CONFIG_FILE"

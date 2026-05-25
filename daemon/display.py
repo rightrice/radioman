@@ -207,9 +207,9 @@ def _draw_ghost(draw: "ImageDraw.ImageDraw", ox: int, oy: int, mood: str):
     draw.ellipse([ox+9,  oy+18, ox+26, oy+36], fill=255)
     draw.ellipse([ox+31, oy+18, ox+48, oy+36], fill=255)
 
-    # Pupils + mouth based on mood
+    # Pupils + WiFi emblem based on mood
     _draw_eyes(draw, ox, oy, mood)
-    _draw_mouth(draw, ox, oy, mood)
+    _draw_wifi_emblem(draw, ox, oy, mood)
 
 
 def _draw_eyes(draw: "ImageDraw.ImageDraw", ox: int, oy: int, mood: str):
@@ -252,6 +252,31 @@ def _draw_eyes(draw: "ImageDraw.ImageDraw", ox: int, oy: int, mood: str):
         # Default / happy / hunting — centered pupils
         draw.ellipse([ox+14, oy+22, ox+21, oy+30], fill=0)
         draw.ellipse([ox+36, oy+22, ox+43, oy+30], fill=0)
+
+
+def _draw_wifi_emblem(draw: "ImageDraw.ImageDraw", ox: int, oy: int, mood: str):
+    """
+    WiFi symbol on ghost chest — white on black body.
+    Dot at bottom, arcs curve upward. Signal strength follows mood:
+      1 bar: bored / sleeping / tired
+      2 bars: default / hunting / happy
+      3 bars: excited / cracked (full signal)
+    """
+    cx = ox + 28
+    cy = oy + 56
+
+    # Dot
+    draw.ellipse([cx-3, cy-3, cx+3, cy+3], fill=255)
+
+    if mood in ("bored", "sleeping", "tired"):
+        bars = [8]
+    elif mood in ("excited", "cracked"):
+        bars = [8, 14, 20]
+    else:
+        bars = [8, 14]
+
+    for r in bars:
+        draw.arc([cx-r, cy-r, cx+r, cy+r], start=215, end=325, fill=255, width=2)
 
 
 def _draw_mouth(draw: "ImageDraw.ImageDraw", ox: int, oy: int, mood: str):
