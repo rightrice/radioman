@@ -90,10 +90,23 @@ else
     # ── Build from source fallback ───────────────────────────────────────────
     apt-get install -y -qq build-essential cmake pkg-config
 
-    TOTAL_SWAP=$(free -m | awk '/Swap:/{print $2}')
-    info "Swap available: ${TOTAL_SWAP}MB"
-    if [ "$TOTAL_SWAP" -lt 1024 ] 2>/dev/null; then
-      warn "Less than 1GB swap — SSH may drop during the linker step."
+    # llama-model.cpp needs ~1.5GB to compile — we need disk-backed swap.
+    # zram (in-memory) does not help here; create a real swapfile on the SD card.
+    BUILD_SWAPFILE="/swapfile_llama_build"
+    TOTAL_DISK_SWAP=$(swapon --show=NAME,TYPE --noheadings 2>/dev/null | grep -v zram | wc -l)
+
+    if [ "$TOTAL_DISK_SWAP" -eq 0 ]; then
+      log "Creating 2GB disk-backed swapfile for build (zram alone is not enough)..."
+      fallocate -l 2G "$BUILD_SWAPFILE" 2>/dev/null || \
+        dd if=/dev/zero of="$BUILD_SWAPFILE" bs=1M count=2048 status=progress
+      chmod 600 "$BUILD_SWAPFILE"
+      mkswap "$BUILD_SWAPFILE"
+      swapon "$BUILD_SWAPFILE"
+      SWAPFILE_CREATED=true
+      info "Disk swap added: $(free -h | awk '/Swap:/{print $2}') total"
+    else
+      SWAPFILE_CREATED=false
+      info "Disk-backed swap already present"
     fi
 
     log "Cloning llama.cpp..."
@@ -123,6 +136,13 @@ else
     cp "$LLAMA_BIN_FOUND" "$LLAMA_BIN"
     chmod +x "$LLAMA_BIN"
     log "llama-cli built and installed to $LLAMA_BIN"
+
+    # Remove the temporary build swapfile — not needed after compile
+    if ${SWAPFILE_CREATED:-false}; then
+      swapoff "$BUILD_SWAPFILE" 2>/dev/null || true
+      rm -f "$BUILD_SWAPFILE"
+      info "Build swapfile removed"
+    fi
   else
     # ── Download pre-built binary ────────────────────────────────────────────
     log "Downloading: $(basename "$ASSET_URL")"
