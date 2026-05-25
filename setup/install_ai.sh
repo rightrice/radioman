@@ -55,70 +55,104 @@ else
 
   info "Latest release: $RELEASE_TAG"
 
-  # Use the per-tag API endpoint to list assets — avoids the /releases/latest rate limit.
-  log "Fetching asset list for $RELEASE_TAG..."
-  RELEASE_JSON=$(curl -sf \
-    "https://api.github.com/repos/ggerganov/llama.cpp/releases/tags/${RELEASE_TAG}" \
-    || echo "")
-
-  # Extract all browser_download_url values and filter for ARM64/aarch64 zips
-  ASSET_URL=$(echo "$RELEASE_JSON" \
-    | grep '"browser_download_url"' \
-    | grep -i 'arm64\|aarch64' \
-    | grep '\.zip' \
-    | head -1 \
-    | cut -d'"' -f4)
+  # Probe known ARM64 asset URL patterns with HEAD requests — no API needed.
+  # llama.cpp has used several naming conventions across release series.
+  ASSET_URL=""
+  BASE="https://github.com/ggerganov/llama.cpp/releases/download/${RELEASE_TAG}"
+  for CANDIDATE in \
+    "${BASE}/llama-${RELEASE_TAG}-bin-ubuntu-arm64.zip" \
+    "${BASE}/llama-${RELEASE_TAG}-bin-linux-arm64.zip" \
+    "${BASE}/llama-${RELEASE_TAG}-bin-ubuntu-aarch64.zip" \
+    "${BASE}/llama-${RELEASE_TAG}-bin-linux-aarch64.zip"
+  do
+    STATUS=$(curl -sf -o /dev/null -w "%{http_code}" -L --max-time 10 "$CANDIDATE" 2>/dev/null || echo "000")
+    if [ "$STATUS" = "200" ]; then
+      ASSET_URL="$CANDIDATE"
+      break
+    fi
+  done
 
   if [ -z "$ASSET_URL" ]; then
-    # Show what IS available to help diagnose
+    warn "No pre-built ARM64 binary found for $RELEASE_TAG."
+    warn "llama.cpp may not ship Linux ARM64 binaries for this release."
+    warn "Falling back to build from source (takes 30-60 min on Pi Zero 2W)."
     echo ""
-    warn "Available assets for $RELEASE_TAG:"
-    echo "$RELEASE_JSON" \
-      | grep '"browser_download_url"' \
-      | cut -d'"' -f4 \
-      | grep '\.zip' \
-      | sed 's/^/  /'
-    echo ""
-    err "No ARM64/aarch64 zip found for release $RELEASE_TAG"
+    BUILD_FROM_SOURCE=true
+  else
+    info "Asset: $(basename "$ASSET_URL")"
+    BUILD_FROM_SOURCE=false
   fi
 
-  info "Asset: $(basename "$ASSET_URL")"
-
-  info "Downloading: $(basename "$ASSET_URL")"
   TMP=$(mktemp -d)
   trap 'rm -rf "$TMP"' EXIT
 
-  if ! wget -q --show-progress -O "$TMP/llama.zip" "$ASSET_URL" 2>&1; then
-    if ! curl -L --progress-bar -o "$TMP/llama.zip" "$ASSET_URL"; then
-      err "Download failed. Check internet connection and try again."
+  if $BUILD_FROM_SOURCE; then
+    # ── Build from source fallback ───────────────────────────────────────────
+    apt-get install -y -qq build-essential cmake pkg-config
+
+    TOTAL_SWAP=$(free -m | awk '/Swap:/{print $2}')
+    info "Swap available: ${TOTAL_SWAP}MB"
+    if [ "$TOTAL_SWAP" -lt 1024 ] 2>/dev/null; then
+      warn "Less than 1GB swap — SSH may drop during the linker step."
     fi
-  fi
 
-  log "Extracting llama-cli..."
-  unzip -q "$TMP/llama.zip" -d "$TMP/llama_extracted"
+    log "Cloning llama.cpp..."
+    git clone --depth=1 -q https://github.com/ggerganov/llama.cpp "$TMP/llama.cpp"
 
-  # Binary may be at the root or inside a subdirectory
-  LLAMA_BIN_FOUND=$(find "$TMP/llama_extracted" -name "llama-cli" -type f 2>/dev/null | head -1)
-  if [ -z "$LLAMA_BIN_FOUND" ]; then
-    # Some releases ship it as 'llama-cli' without extension, try any executable named main
-    LLAMA_BIN_FOUND=$(find "$TMP/llama_extracted" -name "main" -type f 2>/dev/null | head -1)
-  fi
+    log "Building llama-cli (-j1, low priority — takes ~30-60 min)..."
+    cmake -B "$TMP/llama.cpp/build" -S "$TMP/llama.cpp" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DLLAMA_BUILD_SERVER=OFF \
+      -DLLAMA_BUILD_TESTS=OFF \
+      -DLLAMA_BUILD_EXAMPLES=ON \
+      -DCMAKE_C_FLAGS="-O2" \
+      -DCMAKE_CXX_FLAGS="-O2" \
+      -DGGML_NATIVE=OFF \
+      2>/dev/null
 
-  if [ -z "$LLAMA_BIN_FOUND" ]; then
-    warn "Contents of extracted zip:"
-    find "$TMP/llama_extracted" -type f | head -20
-    err "Could not find llama-cli binary in the downloaded zip"
-  fi
+    nice -n 15 ionice -c 3 \
+      cmake --build "$TMP/llama.cpp/build" --config Release -j1 \
+      2>&1 | grep -v "^\[" | tail -5
 
-  cp "$LLAMA_BIN_FOUND" "$LLAMA_BIN"
-  chmod +x "$LLAMA_BIN"
-  log "llama-cli installed to $LLAMA_BIN"
+    LLAMA_BIN_FOUND=$(find "$TMP/llama.cpp/build" -name "llama-cli" -type f 2>/dev/null | head -1)
+    [ -z "$LLAMA_BIN_FOUND" ] && \
+      LLAMA_BIN_FOUND=$(find "$TMP/llama.cpp/build" -name "main" -type f 2>/dev/null | head -1)
+    [ -z "$LLAMA_BIN_FOUND" ] && err "Build failed — llama-cli binary not found"
 
-  # Quick sanity check — just run --version, not a full inference
-  if "$LLAMA_BIN" --version 2>/dev/null | grep -q "version\|llama"; then
-    info "Binary verified: $("$LLAMA_BIN" --version 2>/dev/null | head -1)"
+    cp "$LLAMA_BIN_FOUND" "$LLAMA_BIN"
+    chmod +x "$LLAMA_BIN"
+    log "llama-cli built and installed to $LLAMA_BIN"
   else
-    warn "Binary did not respond to --version — may still work, continuing"
+    # ── Download pre-built binary ────────────────────────────────────────────
+    log "Downloading: $(basename "$ASSET_URL")"
+    if ! wget -q --show-progress -O "$TMP/llama.zip" "$ASSET_URL" 2>&1; then
+      curl -L --progress-bar -o "$TMP/llama.zip" "$ASSET_URL" \
+        || err "Download failed. Check internet connection and try again."
+    fi
+
+    log "Extracting llama-cli..."
+    unzip -q "$TMP/llama.zip" -d "$TMP/llama_extracted"
+
+    LLAMA_BIN_FOUND=$(find "$TMP/llama_extracted" -name "llama-cli" -type f 2>/dev/null | head -1)
+    [ -z "$LLAMA_BIN_FOUND" ] && \
+      LLAMA_BIN_FOUND=$(find "$TMP/llama_extracted" -name "main" -type f 2>/dev/null | head -1)
+
+    if [ -z "$LLAMA_BIN_FOUND" ]; then
+      warn "Contents of zip:"
+      find "$TMP/llama_extracted" -type f | head -20
+      err "Could not find llama-cli binary in the downloaded zip"
+    fi
+
+    cp "$LLAMA_BIN_FOUND" "$LLAMA_BIN"
+    chmod +x "$LLAMA_BIN"
+    log "llama-cli installed to $LLAMA_BIN"
+
+    if "$LLAMA_BIN" --version 2>/dev/null | grep -q "version\|llama"; then
+      info "Binary verified: $("$LLAMA_BIN" --version 2>/dev/null | head -1)"
+    else
+      warn "Binary did not respond to --version — may still work, continuing"
+    fi
   fi
 fi
 
