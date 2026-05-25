@@ -55,29 +55,33 @@ else
 
   info "Latest release: $RELEASE_TAG"
 
-  # Scrape the release page to find the actual ARM64 zip asset name —
-  # llama.cpp changes naming conventions between release series.
-  log "Finding ARM64 asset for $RELEASE_TAG..."
-  RELEASE_HTML=$(curl -sf "https://github.com/ggerganov/llama.cpp/releases/tag/${RELEASE_TAG}" || echo "")
+  # Use the per-tag API endpoint to list assets — avoids the /releases/latest rate limit.
+  log "Fetching asset list for $RELEASE_TAG..."
+  RELEASE_JSON=$(curl -sf \
+    "https://api.github.com/repos/ggerganov/llama.cpp/releases/tags/${RELEASE_TAG}" \
+    || echo "")
 
-  ASSET_PATH=$(echo "$RELEASE_HTML" \
-    | grep -o 'href="[^"]*arm64[^"]*\.zip"' \
+  # Extract all browser_download_url values and filter for ARM64/aarch64 zips
+  ASSET_URL=$(echo "$RELEASE_JSON" \
+    | grep '"browser_download_url"' \
+    | grep -i 'arm64\|aarch64' \
+    | grep '\.zip' \
     | head -1 \
-    | cut -d'"' -f2)
+    | cut -d'"' -f4)
 
-  if [ -z "$ASSET_PATH" ]; then
-    # Try case-insensitive ARM64 match
-    ASSET_PATH=$(echo "$RELEASE_HTML" \
-      | grep -oi 'href="[^"]*ARM64[^"]*\.zip"' \
-      | head -1 \
-      | cut -d'"' -f2)
+  if [ -z "$ASSET_URL" ]; then
+    # Show what IS available to help diagnose
+    echo ""
+    warn "Available assets for $RELEASE_TAG:"
+    echo "$RELEASE_JSON" \
+      | grep '"browser_download_url"' \
+      | cut -d'"' -f4 \
+      | grep '\.zip' \
+      | sed 's/^/  /'
+    echo ""
+    err "No ARM64/aarch64 zip found for release $RELEASE_TAG"
   fi
 
-  if [ -z "$ASSET_PATH" ]; then
-    err "No ARM64 zip found on release page for $RELEASE_TAG — check https://github.com/ggerganov/llama.cpp/releases/tag/${RELEASE_TAG}"
-  fi
-
-  ASSET_URL="https://github.com${ASSET_PATH}"
   info "Asset: $(basename "$ASSET_URL")"
 
   info "Downloading: $(basename "$ASSET_URL")"
