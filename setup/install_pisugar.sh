@@ -84,7 +84,7 @@ systemctl start pisugar-server
 sleep 3
 
 log "Verifying connection..."
-RESULT=$(echo "get battery" | nc -U /tmp/pisugar-server.sock 2>/dev/null || echo "")
+RESULT=$(echo "get battery" | nc -w 2 -U /tmp/pisugar-server.sock 2>/dev/null || echo "")
 
 if echo "$RESULT" | grep -q "I2C not connected"; then
   warn "pisugar-server running but I2C not connected — check physical seating of PiSugar on GPIO header"
