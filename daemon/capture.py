@@ -79,6 +79,17 @@ class CaptureEngine:
             except Exception as e:
                 log.debug("nmcli connect: %s", e)
 
+    def _wait_for_api(self, timeout: int = 30) -> bool:
+        """Poll until bettercap REST API responds or timeout expires."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._bc("GET", "/api/session") is not None:
+                log.info("bettercap API ready")
+                return True
+            time.sleep(1)
+        log.error("bettercap API did not become ready within %ds", timeout)
+        return False
+
     def _start_bettercap(self):
         bc = shutil.which("bettercap")
         if not bc:
@@ -95,10 +106,16 @@ class CaptureEngine:
         try:
             self._proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
             )
-            time.sleep(4)
+            if not self._wait_for_api():
+                # Log whatever bettercap printed to help diagnose
+                try:
+                    out, _ = self._proc.communicate(timeout=1)
+                    log.error("bettercap output: %s", out.decode(errors="replace"))
+                except Exception:
+                    pass
         except Exception as e:
             log.error("Failed to start bettercap: %s", e)
             self._proc = None
@@ -110,16 +127,20 @@ class CaptureEngine:
                 self._proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self._proc.kill()
+                self._proc.wait()
             self._proc = None
         self._nm_reclaim()
 
     def _poll(self):
         data = self._bc("GET", "/api/session/wifi")
         if not data:
+            log.debug("bettercap wifi poll returned no data")
             return
 
-        aps     = data.get("aps", [])
-        clients = data.get("stations", [])
+        aps     = data.get("aps") or []
+        clients = data.get("stations") or []
+        log.debug("bettercap poll: %d APs, %d stations (keys: %s)",
+                  len(aps), len(clients), list(data.keys()))
 
         for ap in aps:
             bssid    = ap.get("mac", "").upper()

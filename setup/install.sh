@@ -50,7 +50,8 @@ apt-get install -y -qq \
   swig \
   liblgpio-dev \
   fonts-dejavu-core \
-  fonts-noto
+  fonts-noto \
+  avahi-daemon
 
 # ── hcxtools (PMKID extraction) ────────────────────────────────────────────────
 if command -v hcxpcapngtool &>/dev/null; then
@@ -117,6 +118,9 @@ fi
 setcap cap_net_raw,cap_net_admin+eip "$(command -v bettercap)" 2>/dev/null || \
   warn "Could not set bettercap capabilities — will require sudo"
 
+# Disable the bettercap system service — radioman manages bettercap itself
+systemctl disable --now bettercap 2>/dev/null || true
+
 # ── Waveshare e-ink library ────────────────────────────────────────────────────
 log "Installing Waveshare e-Paper library..."
 if [ ! -d "/opt/waveshare-epd" ]; then
@@ -128,6 +132,12 @@ fi
 
 # ── Enable SPI, I2C, and USB gadget mode ──────────────────────────────────────
 log "Configuring boot options (SPI, I2C, USB gadget)..."
+
+# Ensure the boot partition is mounted — on Bookworm it's /boot/firmware (FAT32)
+if ! mountpoint -q /boot/firmware 2>/dev/null; then
+  mount /boot/firmware 2>/dev/null && log "Mounted /boot/firmware" || \
+    warn "Could not mount /boot/firmware — boot config edits may fail"
+fi
 
 CONFIG_FILE="/boot/firmware/config.txt"
 [ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
@@ -165,7 +175,26 @@ fi
 
 if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
   sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
-  log "USB gadget ethernet enabled — SSH via USB cable after reboot"
+  if grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
+    log "USB gadget ethernet enabled — SSH via USB cable after reboot"
+  else
+    warn "cmdline.txt modification failed — USB SSH may not work. Check $CMDLINE_FILE manually."
+  fi
+fi
+
+# Configure usb0 with a static IP so SSH over USB works without DHCP
+if command -v nmcli &>/dev/null; then
+  nmcli connection delete "usb-gadget" 2>/dev/null || true
+  nmcli connection add \
+    type ethernet \
+    ifname usb0 \
+    con-name "usb-gadget" \
+    ipv4.method manual \
+    ipv4.addresses "10.55.0.1/24" \
+    ipv6.method disabled \
+    connection.autoconnect yes 2>/dev/null && \
+    log "usb0 static IP configured (10.55.0.1) — set Mac USB Gadget to 10.55.0.2" || \
+    warn "Could not create usb0 NM profile — configure manually after reboot"
 fi
 
 # ── Radioman directories and source files ──────────────────────────────────────
@@ -271,15 +300,14 @@ echo ""
 warn "REBOOT REQUIRED to activate SPI / I2C / USB gadget changes."
 echo ""
 info "After reboot:"
-info "  USB SSH:    ssh pi@radioman.local  (via USB data cable)"
+info "  USB SSH:    ssh pi@10.55.0.1  (set Mac USB Gadget to 10.55.0.2/255.255.0.0)"
 info "  WiFi SSH:   ssh pi@radioman.local  (while not scanning)"
 info "  Logs:       journalctl -u radioman -f"
 info "  Dashboard:  http://radioman.local:8080"
 echo ""
-warn "PiSugar battery not configured yet."
-warn "Run separately once terminal is stable:"
-warn "  sudo bash setup/install_pisugar.sh"
-echo ""
 warn "NOTE: bettercap puts wlan0 into monitor mode — WiFi SSH drops during scanning."
-warn "Use the USB cable as your primary management connection."
+warn "Use the USB cable (10.55.0.1) as your primary management connection."
+echo ""
+warn "PiSugar battery: run setup/install_pisugar.sh separately if needed."
+warn "Battery reads via direct I2C automatically if pisugar-server is not installed."
 echo ""
