@@ -33,16 +33,21 @@ def _read_i2c_direct() -> dict:
         status = bus.read_byte_data(_I2C_ADDR, 0x02)
         bus.close()
 
-        # Reconstruct 10-bit ADC value, convert to millivolts
+        # Reconstruct 10-bit ADC value, convert to volts
         v_raw = ((v_high & 0x3f) << 4) | ((v_low >> 4) & 0x0f)
-        voltage = (2600 + v_raw * 0.26855) / 1000  # volts
+        voltage = (2600 + v_raw * 0.26855) / 1000
 
         # Linear approximation of IP5209 discharge curve (3.0V=0%, 4.1V=100%)
         pct = int(min(100, max(0, (voltage - 3.0) / (4.1 - 3.0) * 100)))
 
+        # IP5209 register 0x02 bit 4 (0x10) = charging in progress
+        # Bit 5 (0x20) = charging done. Either means USB power connected.
+        charging = bool(status & 0x30)
+
         return {
             "percent":  pct,
-            "charging": bool(status & 0x01),
+            "voltage":  round(voltage, 3),
+            "charging": charging,
             "source":   "i2c",
         }
     except Exception as e:

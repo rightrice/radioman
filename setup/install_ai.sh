@@ -51,13 +51,27 @@ else
   apt-get update -qq
   apt-get install -y -qq build-essential cmake pkg-config
 
+  # Check swap — recommend 2GB for a safe build on 512MB Pi Zero 2W
+  TOTAL_SWAP=$(free -m | awk '/Swap:/{print $2}')
+  if [ "$TOTAL_SWAP" -lt 1024 ] 2>/dev/null; then
+    warn "Less than 1GB swap available (${TOTAL_SWAP}MB). The build may OOM-kill SSH."
+    warn "Run this first for a safe build:"
+    warn "  sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' /etc/dphys-swapfile"
+    warn "  sudo dphys-swapfile setup && sudo dphys-swapfile swapon"
+    warn "Continuing anyway — SSH may drop during the linker step."
+  else
+    info "Swap: ${TOTAL_SWAP}MB — sufficient for build"
+  fi
+
+  trap 'rm -rf "$TMP"' EXIT
+
   log "Cloning llama.cpp (latest release)..."
   TMP=$(mktemp -d)
-  trap 'rm -rf "$TMP"' EXIT
 
   git clone --depth=1 -q https://github.com/ggerganov/llama.cpp "$TMP/llama.cpp"
 
-  log "Building llama-cli for ARM64 (this takes ~20 minutes on Pi Zero 2W)..."
+  log "Building llama-cli for ARM64 (this takes ~25 minutes on Pi Zero 2W)..."
+  log "SSH will stay alive — build runs at low priority with expanded swap."
   cmake -B "$TMP/llama.cpp/build" \
     -S "$TMP/llama.cpp" \
     -DCMAKE_BUILD_TYPE=Release \
@@ -70,11 +84,13 @@ else
     -DGGML_NATIVE=OFF \
     2>/dev/null
 
-  # Build all default targets — target name varies across llama.cpp versions
-  cmake --build "$TMP/llama.cpp/build" \
-    --config Release \
-    -j2 \
-    2>&1 | grep -v "^\[" | tail -30
+  # -j1 to keep peak RAM below OOM threshold on 512MB Pi Zero 2W.
+  # nice/ionice keeps SSH and the radioman service responsive during the build.
+  nice -n 15 ionice -c 3 \
+    cmake --build "$TMP/llama.cpp/build" \
+      --config Release \
+      -j1 \
+      2>&1 | grep -v "^\[" | tail -30
 
   # Find the binary wherever cmake put it (location varies by version)
   LLAMA_BIN_BUILT=$(find "$TMP/llama.cpp/build" -name "llama-cli" -type f 2>/dev/null | head -1)

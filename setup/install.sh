@@ -30,6 +30,32 @@ log "Updating system packages..."
 apt-get update -qq
 apt-get upgrade -y -qq
 
+# ── Swap + zram (critical for 512MB Pi Zero 2W) ────────────────────────────────
+log "Configuring swap and zram..."
+
+# Set permanent 2GB swap — safe with 21GB+ SD card, needed for llama.cpp builds
+DPHYS_CONF="/etc/dphys-swapfile"
+if [ -f "$DPHYS_CONF" ]; then
+  sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' "$DPHYS_CONF"
+  # Remove any cap that would limit swap below 2GB
+  sed -i 's/^#*CONF_MAXSWAP=.*/CONF_MAXSWAP=2048/' "$DPHYS_CONF"
+  dphys-swapfile swapoff 2>/dev/null || true
+  dphys-swapfile setup
+  dphys-swapfile swapon
+  log "Swap set to 2GB"
+fi
+
+# zram — compressed in-memory swap, used before SD card swap
+# lz4 compression gives ~2x ratio with minimal CPU overhead on ARM
+apt-get install -y -qq zram-tools
+cat > /etc/default/zramswap <<'EOF'
+ALGO=lz4
+PERCENT=50
+EOF
+systemctl enable zramswap 2>/dev/null || true
+systemctl restart zramswap 2>/dev/null || true
+log "zram enabled (lz4, 50% of RAM)"
+
 # ── Core system dependencies ───────────────────────────────────────────────────
 log "Installing system dependencies..."
 apt-get install -y -qq \
