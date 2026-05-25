@@ -156,7 +156,12 @@ log "SPI and I2C enabled in $CONFIG_FILE"
 CMDLINE_FILE="/boot/firmware/cmdline.txt"
 [ -f "/boot/cmdline.txt" ] && CMDLINE_FILE="/boot/cmdline.txt"
 
-grep -q "^dtoverlay=dwc2" "$CONFIG_FILE" || echo "dtoverlay=dwc2" >> "$CONFIG_FILE"
+# Ensure dwc2 is present and not forced into host mode (host mode disables gadget/USB-SSH)
+if grep -q "^dtoverlay=dwc2,dr_mode=host" "$CONFIG_FILE"; then
+  sed -i 's/^dtoverlay=dwc2,dr_mode=host.*/dtoverlay=dwc2/' "$CONFIG_FILE"
+elif ! grep -q "^dtoverlay=dwc2" "$CONFIG_FILE"; then
+  echo "dtoverlay=dwc2" >> "$CONFIG_FILE"
+fi
 
 if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
   sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
