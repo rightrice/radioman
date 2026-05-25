@@ -117,45 +117,6 @@ fi
 setcap cap_net_raw,cap_net_admin+eip "$(command -v bettercap)" 2>/dev/null || \
   warn "Could not set bettercap capabilities — will require sudo"
 
-# ── PiSugar 2 ─────────────────────────────────────────────────────────────────
-log "Installing PiSugar 2 server..."
-if ! command -v pisugar-server &>/dev/null; then
-  curl -s https://cdn.pisugar.com/release/pisugar-power-manager.sh | bash || \
-    warn "PiSugar install failed — battery will use direct I2C fallback"
-
-  # Stop immediately — never let it run with a blank config.
-  # pisugar-server with no model set sends unrecognized I2C commands that can
-  # corrupt the IP5312 chip state and leave the bus unresponsive.
-  systemctl stop pisugar-server 2>/dev/null || true
-
-  # Set model non-interactively via debconf then write safe defaults to config.
-  echo "pisugar-server pisugar-server/model select PiSugar 2 (2-LEDs)" \
-    | debconf-set-selections
-  DEBIAN_FRONTEND=noninteractive dpkg-reconfigure pisugar-server 2>/dev/null || \
-    warn "dpkg-reconfigure pisugar-server failed — run manually: sudo dpkg-reconfigure pisugar-server"
-
-  # Write auto_power_on so the Pi stays up when USB is disconnected.
-  PISUGAR_CFG="/etc/pisugar-server/config.json"
-  if [ -f "$PISUGAR_CFG" ]; then
-    python3 - "$PISUGAR_CFG" <<'PYEOF'
-import json, sys
-path = sys.argv[1]
-with open(path) as f:
-    c = json.load(f)
-c["auto_power_on"] = True
-with open(path, "w") as f:
-    json.dump(c, f, indent=2)
-PYEOF
-    log "PiSugar auto_power_on enabled"
-  fi
-
-  systemctl enable pisugar-server
-  systemctl start pisugar-server
-  log "PiSugar server configured and started (model: PiSugar 2 (2-LEDs))"
-else
-  info "PiSugar server already installed — skipping configuration"
-fi
-
 # ── Waveshare e-ink library ────────────────────────────────────────────────────
 log "Installing Waveshare e-Paper library..."
 if [ ! -d "/opt/waveshare-epd" ]; then
@@ -305,6 +266,10 @@ info "  USB SSH:    ssh pi@radioman.local  (via USB data cable)"
 info "  WiFi SSH:   ssh pi@radioman.local  (while not scanning)"
 info "  Logs:       journalctl -u radioman -f"
 info "  Dashboard:  http://radioman.local:8080"
+echo ""
+warn "PiSugar battery not configured yet."
+warn "Run separately once terminal is stable:"
+warn "  sudo bash setup/install_pisugar.sh"
 echo ""
 warn "NOTE: bettercap puts wlan0 into monitor mode — WiFi SSH drops during scanning."
 warn "Use the USB cable as your primary management connection."
