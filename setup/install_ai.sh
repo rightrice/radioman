@@ -55,20 +55,30 @@ else
 
   info "Latest release: $RELEASE_TAG"
 
-  # Construct the ARM64 asset URL directly from the tag.
-  # llama.cpp names the asset: llama-{tag}-bin-ubuntu-arm64.zip
-  ASSET_URL="https://github.com/ggerganov/llama.cpp/releases/download/${RELEASE_TAG}/llama-${RELEASE_TAG}-bin-ubuntu-arm64.zip"
+  # Scrape the release page to find the actual ARM64 zip asset name —
+  # llama.cpp changes naming conventions between release series.
+  log "Finding ARM64 asset for $RELEASE_TAG..."
+  RELEASE_HTML=$(curl -sf "https://github.com/ggerganov/llama.cpp/releases/tag/${RELEASE_TAG}" || echo "")
 
-  # Verify the asset exists before downloading
-  HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" -L "$ASSET_URL" 2>/dev/null || echo "000")
-  if [ "$HTTP_STATUS" != "200" ]; then
-    # Try linux-arm64 variant (used in some release series)
-    ASSET_URL="https://github.com/ggerganov/llama.cpp/releases/download/${RELEASE_TAG}/llama-${RELEASE_TAG}-bin-linux-arm64.zip"
-    HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" -L "$ASSET_URL" 2>/dev/null || echo "000")
-    if [ "$HTTP_STATUS" != "200" ]; then
-      err "No ARM64 binary found for release $RELEASE_TAG — check https://github.com/ggerganov/llama.cpp/releases"
-    fi
+  ASSET_PATH=$(echo "$RELEASE_HTML" \
+    | grep -o 'href="[^"]*arm64[^"]*\.zip"' \
+    | head -1 \
+    | cut -d'"' -f2)
+
+  if [ -z "$ASSET_PATH" ]; then
+    # Try case-insensitive ARM64 match
+    ASSET_PATH=$(echo "$RELEASE_HTML" \
+      | grep -oi 'href="[^"]*ARM64[^"]*\.zip"' \
+      | head -1 \
+      | cut -d'"' -f2)
   fi
+
+  if [ -z "$ASSET_PATH" ]; then
+    err "No ARM64 zip found on release page for $RELEASE_TAG — check https://github.com/ggerganov/llama.cpp/releases/tag/${RELEASE_TAG}"
+  fi
+
+  ASSET_URL="https://github.com${ASSET_PATH}"
+  info "Asset: $(basename "$ASSET_URL")"
 
   info "Downloading: $(basename "$ASSET_URL")"
   TMP=$(mktemp -d)
