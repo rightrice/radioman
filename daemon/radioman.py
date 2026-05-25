@@ -90,7 +90,7 @@ class Radioman:
         capture_cfg["interface"]   = self._iface
         capture_cfg["caplet"]      = os.path.join(BASE_DIR, "radioman.cap")
 
-        self.xplt_sync   = XpltSync(xplt_cfg, self._db_path)
+        self.xplt_sync   = XpltSync(xplt_cfg, self._db_path, conf_path=config_path)
         self.ai          = AIEngine(db_path=self._db_path)
         self.personality = PersonalityEngine()
         self.display     = Display(

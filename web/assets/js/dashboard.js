@@ -66,7 +66,13 @@ async function poll() {
     setStatus(true);
     document.getElementById("rmLoading")?.remove();
     updateUptime(status.personality?.uptime_seconds || 0);
-    renderMain(status, data, xplt || null);
+    // Don't re-render if the user is actively typing in a form field —
+    // this prevents the pairing inputs from being wiped mid-entry.
+    const active = document.activeElement;
+    const userTyping = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
+    if (!userTyping) {
+      renderMain(status, data, xplt || null);
+    }
   } catch (e) {
     setStatus(false);
     console.error("Poll error:", e);

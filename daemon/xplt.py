@@ -28,14 +28,15 @@ TIMEOUT       = 20    # seconds for HTTP requests
 
 
 class XpltSync:
-    def __init__(self, config: dict, db_path: str):
+    def __init__(self, config: dict, db_path: str, conf_path: str = ""):
         # Device token can come from env var or config file.
         # The token is provisioned once when the device is registered in XPLT.
-        self._token   = (os.environ.get("XPLT_DEVICE_TOKEN") or
-                         config.get("device_token", "")).strip()
-        self._db_path = db_path
-        self._running = False
-        self._enabled = bool(self._token)
+        self._token     = (os.environ.get("XPLT_DEVICE_TOKEN") or
+                           config.get("device_token", "")).strip()
+        self._db_path   = db_path
+        self._conf_path = conf_path
+        self._running   = False
+        self._enabled   = bool(self._token)
 
         self._last_sync_ts: Optional[float] = None
         self._last_error:   Optional[str]   = None
@@ -105,6 +106,34 @@ class XpltSync:
             self.start()
         log.info("XPLT: device token set, sync activated")
 
+    def unpair(self):
+        """
+        Disable sync and clear the stored token.
+        Removes device_token from radioman.conf so the dashboard shows 'not paired'
+        on the next poll. Called automatically when the server returns 401.
+        """
+        with self._lock:
+            self._token   = ""
+            self._enabled = False
+            self._running = False
+            self._last_error = "token revoked"
+        log.info("XPLT: token cleared — device unpaired")
+        self._remove_token_from_conf()
+
+    def _remove_token_from_conf(self):
+        """Strip device_token line from radioman.conf without touching other keys."""
+        if not self._conf_path or not os.path.isfile(self._conf_path):
+            return
+        try:
+            with open(self._conf_path, "r") as f:
+                lines = f.readlines()
+            new_lines = [l for l in lines if not l.strip().startswith("device_token")]
+            with open(self._conf_path, "w") as f:
+                f.writelines(new_lines)
+            log.info("XPLT: device_token removed from %s", self._conf_path)
+        except Exception as e:
+            log.warning("XPLT: could not update conf: %s", e)
+
     def snapshot(self) -> dict:
         with self._lock:
             return {
@@ -160,9 +189,8 @@ class XpltSync:
                 return
 
             if resp.status_code == 401:
-                log.error("XPLT: invalid device token — check device_token in radioman.conf")
-                with self._lock:
-                    self._last_error = "invalid device token"
+                log.error("XPLT: device token revoked or invalid — clearing pairing")
+                self.unpair()
                 return
 
             if resp.status_code == 429:

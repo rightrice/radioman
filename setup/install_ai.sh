@@ -1,10 +1,9 @@
 #!/bin/bash
 # radioman AI installer
-# Builds llama.cpp for ARM64 and downloads IBM Granite 1B Q2_K GGUF.
+# Downloads pre-built llama-cli for ARM64 and IBM Granite 1B Q2_K GGUF.
 # Run as root AFTER install.sh: sudo bash setup/install_ai.sh
 #
-# Disk: ~1.5GB for build deps + model (~400MB) + llama.cpp binary
-# RAM during build: ~200MB  (build takes 15-30 min on Pi Zero 2W)
+# Disk: ~5MB binary + ~400MB model
 # RAM during inference: model is loaded per-request by llama-cli subprocess
 
 set -e
@@ -16,7 +15,6 @@ MODEL_FILE="$MODEL_DIR/granite.gguf"
 LLAMA_BIN="$LLAMA_DIR/llama-cli"
 
 # Model: IBM Granite 3.2 1B A400M Instruct at Q2_K quantization (~400MB)
-# Hosted by community GGUF provider on HuggingFace
 MODEL_REPO="bartowski/granite-3.2-1b-a400m-instruct-GGUF"
 MODEL_FILENAME="granite-3.2-1b-a400m-instruct-Q2_K.gguf"
 HF_BASE="https://huggingface.co"
@@ -37,76 +35,71 @@ info() { echo -e "${BLUE}[info]${NC} $1"; }
 
 log "Starting radioman AI installation..."
 echo ""
-warn "This will take 15-30 minutes on a Pi Zero 2W."
-warn "The model download is ~400MB. Ensure you have a stable internet connection."
-echo ""
 
 mkdir -p "$LLAMA_DIR" "$MODEL_DIR"
 
-# ── Build llama.cpp ────────────────────────────────────────────────────────────
+# ── llama-cli binary ──────────────────────────────────────────────────────────
 if [ -f "$LLAMA_BIN" ]; then
   info "llama-cli already present at $LLAMA_BIN"
 else
-  log "Installing llama.cpp build dependencies..."
-  apt-get update -qq
-  apt-get install -y -qq build-essential cmake pkg-config
+  log "Fetching latest llama.cpp release info..."
 
-  # Check swap — recommend 2GB for a safe build on 512MB Pi Zero 2W
-  TOTAL_SWAP=$(free -m | awk '/Swap:/{print $2}')
-  if [ "$TOTAL_SWAP" -lt 1024 ] 2>/dev/null; then
-    warn "Less than 1GB swap available (${TOTAL_SWAP}MB). The build may OOM-kill SSH."
-    warn "Run this first for a safe build:"
-    warn "  sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' /etc/dphys-swapfile"
-    warn "  sudo dphys-swapfile setup && sudo dphys-swapfile swapon"
-    warn "Continuing anyway — SSH may drop during the linker step."
-  else
-    info "Swap: ${TOTAL_SWAP}MB — sufficient for build"
+  RELEASE_JSON=$(curl -sf "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest" || echo "")
+  if [ -z "$RELEASE_JSON" ]; then
+    err "Could not reach GitHub API — check internet connection"
   fi
 
+  RELEASE_TAG=$(echo "$RELEASE_JSON" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+  info "Latest release: $RELEASE_TAG"
+
+  # Asset name pattern for Linux ARM64 (matches ubuntu-arm64 and linux-arm64 variants)
+  ASSET_URL=$(echo "$RELEASE_JSON" \
+    | grep '"browser_download_url"' \
+    | grep -i "linux-arm64\|ubuntu-arm64" \
+    | grep "\.zip" \
+    | head -1 \
+    | cut -d'"' -f4)
+
+  if [ -z "$ASSET_URL" ]; then
+    err "No ARM64 binary found in release $RELEASE_TAG — check https://github.com/ggerganov/llama.cpp/releases"
+  fi
+
+  info "Downloading: $(basename "$ASSET_URL")"
+  TMP=$(mktemp -d)
   trap 'rm -rf "$TMP"' EXIT
 
-  log "Cloning llama.cpp (latest release)..."
-  TMP=$(mktemp -d)
-
-  git clone --depth=1 -q https://github.com/ggerganov/llama.cpp "$TMP/llama.cpp"
-
-  log "Building llama-cli for ARM64 (this takes ~25 minutes on Pi Zero 2W)..."
-  log "SSH will stay alive — build runs at low priority with expanded swap."
-  cmake -B "$TMP/llama.cpp/build" \
-    -S "$TMP/llama.cpp" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_SHARED_LIBS=OFF \
-    -DLLAMA_BUILD_SERVER=OFF \
-    -DLLAMA_BUILD_TESTS=OFF \
-    -DLLAMA_BUILD_EXAMPLES=ON \
-    -DCMAKE_C_FLAGS="-O2" \
-    -DCMAKE_CXX_FLAGS="-O2" \
-    -DGGML_NATIVE=OFF \
-    2>/dev/null
-
-  # -j1 to keep peak RAM below OOM threshold on 512MB Pi Zero 2W.
-  # nice/ionice keeps SSH and the radioman service responsive during the build.
-  nice -n 15 ionice -c 3 \
-    cmake --build "$TMP/llama.cpp/build" \
-      --config Release \
-      -j1 \
-      2>&1 | grep -v "^\[" | tail -30
-
-  # Find the binary wherever cmake put it (location varies by version)
-  LLAMA_BIN_BUILT=$(find "$TMP/llama.cpp/build" -name "llama-cli" -type f 2>/dev/null | head -1)
-
-  if [ -z "$LLAMA_BIN_BUILT" ]; then
-    # Older llama.cpp used 'main' as the CLI binary name
-    LLAMA_BIN_BUILT=$(find "$TMP/llama.cpp/build" -name "main" -type f 2>/dev/null | head -1)
+  if ! wget -q --show-progress -O "$TMP/llama.zip" "$ASSET_URL" 2>&1; then
+    if ! curl -L --progress-bar -o "$TMP/llama.zip" "$ASSET_URL"; then
+      err "Download failed. Check internet connection and try again."
+    fi
   fi
 
-  if [ -z "$LLAMA_BIN_BUILT" ]; then
-    err "Build failed — could not find llama-cli or main binary under build/"
+  log "Extracting llama-cli..."
+  unzip -q "$TMP/llama.zip" -d "$TMP/llama_extracted"
+
+  # Binary may be at the root or inside a subdirectory
+  LLAMA_BIN_FOUND=$(find "$TMP/llama_extracted" -name "llama-cli" -type f 2>/dev/null | head -1)
+  if [ -z "$LLAMA_BIN_FOUND" ]; then
+    # Some releases ship it as 'llama-cli' without extension, try any executable named main
+    LLAMA_BIN_FOUND=$(find "$TMP/llama_extracted" -name "main" -type f 2>/dev/null | head -1)
   fi
 
-  cp "$LLAMA_BIN_BUILT" "$LLAMA_BIN"
+  if [ -z "$LLAMA_BIN_FOUND" ]; then
+    warn "Contents of extracted zip:"
+    find "$TMP/llama_extracted" -type f | head -20
+    err "Could not find llama-cli binary in the downloaded zip"
+  fi
+
+  cp "$LLAMA_BIN_FOUND" "$LLAMA_BIN"
   chmod +x "$LLAMA_BIN"
-  log "llama-cli installed to $LLAMA_BIN (from $LLAMA_BIN_BUILT)"
+  log "llama-cli installed to $LLAMA_BIN"
+
+  # Quick sanity check — just run --version, not a full inference
+  if "$LLAMA_BIN" --version 2>/dev/null | grep -q "version\|llama"; then
+    info "Binary verified: $("$LLAMA_BIN" --version 2>/dev/null | head -1)"
+  else
+    warn "Binary did not respond to --version — may still work, continuing"
+  fi
 fi
 
 # ── Download IBM Granite GGUF model ───────────────────────────────────────────
@@ -114,10 +107,10 @@ if [ -f "$MODEL_FILE" ] && [ "$(stat -c%s "$MODEL_FILE" 2>/dev/null || echo 0)" 
   info "Granite model already present at $MODEL_FILE"
 else
   log "Downloading IBM Granite 3.2 1B A400M Instruct (Q2_K, ~400MB)..."
+  info "This may take 5-15 minutes depending on your connection."
 
   MODEL_URL="${HF_BASE}/${MODEL_REPO}/resolve/main/${MODEL_FILENAME}"
 
-  # Try wget with progress, fall back to curl
   if wget -q --show-progress -O "$MODEL_FILE.tmp" "$MODEL_URL" 2>&1; then
     mv "$MODEL_FILE.tmp" "$MODEL_FILE"
     log "Model downloaded: $MODEL_FILE"
@@ -131,10 +124,10 @@ else
 fi
 
 # ── Smoke test ────────────────────────────────────────────────────────────────
-log "Running smoke test (may take ~60 seconds)..."
+log "Running smoke test (may take ~60 seconds on first load)..."
 TEST_OUT=$("$LLAMA_BIN" \
   --model "$MODEL_FILE" \
-  --threads 2 \
+  --threads 4 \
   --ctx-size 64 \
   --n-predict 20 \
   --temp 0.1 \
@@ -148,7 +141,7 @@ if [ -z "$TEST_OUT" ]; then
   warn "Smoke test produced no output — model may still work for longer prompts."
   warn "Run manually: $LLAMA_BIN --model $MODEL_FILE --prompt \"hello\" --n-predict 20"
 else
-  log "Smoke test OK: \"${TEST_OUT:0:80}...\""
+  log "Smoke test OK: \"${TEST_OUT:0:80}\""
 fi
 
 # ── Update radioman.conf with AI paths ────────────────────────────────────────
