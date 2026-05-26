@@ -50,8 +50,8 @@ if [ ! -f "$FW_BLOB" ] || [ "$(wc -c < "$FW_BLOB")" -lt 10000 ]; then
     https://github.com/seemoo-lab/nexmon "$NEXMON_DIR"
   git -C "$NEXMON_DIR" sparse-checkout set "$PATCH_SUBDIR"
   git -C "$NEXMON_DIR" checkout -q
-  git -C "$NEXMON_DIR" lfs install --local -q
-  git -C "$NEXMON_DIR" lfs pull --include="$PATCH_SUBDIR/brcmfmac43430-sdio.bin"
+  git -C "$NEXMON_DIR" lfs install --local
+  git -C "$NEXMON_DIR" lfs pull --include="$PATCH_SUBDIR/brcmfmac43430-sdio.bin" 2>&1 | tail -3
 fi
 
 [ ! -f "$FW_BLOB" ] && err "Firmware blob not found: $FW_BLOB"
