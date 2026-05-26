@@ -40,27 +40,52 @@ SIZE=$(wc -c < "$FROM_FILE")
 [ "$SIZE" -lt 10000 ] && err "File too small (${SIZE} bytes) — not a valid firmware"
 info "Using pre-built firmware: $FROM_FILE (${SIZE} bytes)"
 
-# ── Locate system firmware ─────────────────────────────────────────────────────
-FW_FILE=""
-for f in /usr/lib/firmware/brcm/brcmfmac43430-sdio.bin \
-          /lib/firmware/brcm/brcmfmac43430-sdio.bin; do
-  [ -f "$f" ] && FW_FILE="$f" && break
-done
-[ -z "$FW_FILE" ] && err "brcmfmac43430-sdio.bin not found — is the WiFi driver loaded?"
-info "System firmware: $FW_FILE"
-
-# ── Backup original ────────────────────────────────────────────────────────────
-BACKUP="${FW_FILE}.orig"
-if [ ! -f "$BACKUP" ]; then
-  cp "$FW_FILE" "$BACKUP"
-  log "Original firmware backed up to $(basename $BACKUP)"
-else
-  info "Backup already exists — skipping"
+# ── Detect board-specific firmware path ────────────────────────────────────────
+# Pi Zero 2W loads brcmfmac43430-sdio.raspberrypi,model-zero-2-w.bin (a symlink
+# to brcmfmac43436s-sdio.bin) rather than the generic brcmfmac43430-sdio.bin.
+# That board-specific path takes priority, so we must patch it directly.
+FW_BRCM_DIR="/usr/lib/firmware/brcm"
+BOARD_COMPAT=$(cat /proc/device-tree/compatible 2>/dev/null | tr '\0' '\n' | grep "raspberrypi" | head -1 || true)
+BOARD_FW_LINK=""
+if [ -n "$BOARD_COMPAT" ]; then
+  CANDIDATE="${FW_BRCM_DIR}/brcmfmac43430-sdio.${BOARD_COMPAT}.bin"
+  [ -e "$CANDIDATE" ] && BOARD_FW_LINK="$CANDIDATE"
 fi
 
-# ── Install ────────────────────────────────────────────────────────────────────
-log "Installing nexmon patched firmware..."
-cp "$FROM_FILE" "$FW_FILE"
+install_fw() {
+  local dest="$1"
+  local label="$2"
+  # dest may be a symlink — resolve to real file so we patch what the kernel loads
+  local real
+  real=$(readlink -f "$dest")
+  local backup="${real}.orig"
+  if [ ! -f "$backup" ]; then
+    cp "$real" "$backup"
+    log "Backed up ${label} → $(basename $backup)"
+  else
+    info "Backup already exists for ${label}"
+  fi
+  cp "$FROM_FILE" "$real"
+  log "Nexmon installed to ${label} (${real})"
+}
+
+# ── Install to board-specific path (takes kernel priority) ────────────────────
+if [ -n "$BOARD_FW_LINK" ]; then
+  info "Board: $BOARD_COMPAT"
+  install_fw "$BOARD_FW_LINK" "board firmware"
+else
+  warn "No board-specific firmware path found — installing to generic path only"
+fi
+
+# ── Install to generic path as well ───────────────────────────────────────────
+GENERIC_FW=""
+for f in "${FW_BRCM_DIR}/brcmfmac43430-sdio.bin" \
+          /lib/firmware/brcm/brcmfmac43430-sdio.bin; do
+  [ -f "$f" ] && GENERIC_FW="$f" && break
+done
+if [ -n "$GENERIC_FW" ]; then
+  install_fw "$GENERIC_FW" "generic firmware"
+fi
 
 # ── Reload driver ──────────────────────────────────────────────────────────────
 log "Reloading brcmfmac with patched firmware..."
@@ -93,6 +118,3 @@ warn "Reboot to load the patched firmware cleanly: sudo reboot"
 echo ""
 info "After reboot, verify:"
 info "  sudo iw dev wlan0 set type monitor && echo 'monitor mode OK' && sudo iw dev wlan0 set type managed"
-info ""
-info "To restore original firmware:"
-info "  sudo cp ${BACKUP} ${FW_FILE} && sudo reboot"
