@@ -94,9 +94,10 @@ PATCH_PATH="$NEXMON_DIR/$PATCH_DIR"
 
 log "Building patched firmware for BCM43430A1..."
 cd "$PATCH_PATH"
-# nexmon patch Makefile creates tmp/obj as order-only prerequisites;
-# parallel make races them — pre-create to avoid "mv: cannot stat 'tmp'"
-mkdir -p tmp obj
+# nexmon Makefile uses 'tmp' as a temp file (compile-then-rename); a leftover
+# tmp/ directory from a previous run will cause "Is a directory" errors
+[ -d tmp ] && rm -rf tmp
+mkdir -p log obj
 
 BUILD_LOG="$NEXMON_DIR/build_patch.log"
 set +e
@@ -105,6 +106,10 @@ BUILD_EXIT=${PIPESTATUS[0]}
 set -e
 
 if [ $BUILD_EXIT -ne 0 ]; then
+  if [ -f log/compiler.log ]; then
+    warn "Compiler log:"
+    cat log/compiler.log
+  fi
   warn "Last 30 lines of build log:"
   tail -30 "$BUILD_LOG"
   err "Patch build failed (exit $BUILD_EXIT)"
