@@ -130,13 +130,14 @@ fi
 # ── Transfer to Zero 2W ───────────────────────────────────────────────────────
 echo ""
 if [ -n "$ZERO_ADDR" ]; then
-  log "Transferring to pi@${ZERO_ADDR}:/opt/radioman/llama/llama-cli ..."
-  ssh "pi@${ZERO_ADDR}" "sudo mkdir -p /opt/radioman/llama"
+  log "Transferring binary to pi@${ZERO_ADDR}:/tmp/llama-cli ..."
   scp "$LLAMA_BIN" "pi@${ZERO_ADDR}:/tmp/llama-cli"
-  ssh "pi@${ZERO_ADDR}" "sudo mv /tmp/llama-cli /opt/radioman/llama/llama-cli && sudo chmod +x /opt/radioman/llama/llama-cli"
   log "Transfer complete."
   echo ""
-  info "On the Zero 2W, restart radioman to activate AI:"
+  info "On the Zero 2W, run:"
+  info "  sudo mkdir -p /opt/radioman/llama"
+  info "  sudo mv /tmp/llama-cli /opt/radioman/llama/llama-cli"
+  info "  sudo chmod +x /opt/radioman/llama/llama-cli"
   info "  sudo systemctl restart radioman"
 else
   echo ""
