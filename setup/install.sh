@@ -165,8 +165,9 @@ if ! mountpoint -q /boot/firmware 2>/dev/null; then
     warn "Could not mount /boot/firmware — boot config edits may fail"
 fi
 
+# Prefer /boot/firmware (Bookworm) — only fall back to /boot if firmware path absent
 CONFIG_FILE="/boot/firmware/config.txt"
-[ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
+[ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/boot/config.txt"
 
 # Enable SPI — uncomment if commented, replace if set to off, append if absent
 if grep -q "^#dtparam=spi=" "$CONFIG_FILE"; then
@@ -190,7 +191,7 @@ log "SPI and I2C enabled in $CONFIG_FILE"
 
 # USB gadget ethernet (SSH over USB data cable)
 CMDLINE_FILE="/boot/firmware/cmdline.txt"
-[ -f "/boot/cmdline.txt" ] && CMDLINE_FILE="/boot/cmdline.txt"
+[ ! -f "$CMDLINE_FILE" ] && CMDLINE_FILE="/boot/cmdline.txt"
 
 # Ensure dwc2 is present and NOT forced into host mode.
 # Pi Imager sometimes writes dtoverlay=dwc2,dr_mode=host which disables gadget mode.
@@ -231,7 +232,7 @@ if command -v nmcli &>/dev/null; then
     ipv4.addresses "10.55.0.1/24" \
     ipv6.method disabled \
     connection.autoconnect yes 2>/dev/null && \
-    log "usb0 static IP configured (10.55.0.1) — set Mac USB Gadget to 10.55.0.2" || \
+    log "usb0 static IP configured (10.55.0.1) — set Mac or PC USB Gadget to 10.55.0.2" || \
     warn "Could not create usb0 NM profile — configure manually after reboot"
 fi
 

@@ -121,9 +121,9 @@ echo ""
 log "Boot config..."
 
 CONFIG_FILE="/boot/firmware/config.txt"
-[ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
+[ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/boot/config.txt"
 CMDLINE_FILE="/boot/firmware/cmdline.txt"
-[ -f "/boot/cmdline.txt" ] && CMDLINE_FILE="/boot/cmdline.txt"
+[ ! -f "$CMDLINE_FILE" ] && CMDLINE_FILE="/boot/cmdline.txt"
 
 # Ensure boot partition is mounted
 if ! mountpoint -q /boot/firmware 2>/dev/null; then

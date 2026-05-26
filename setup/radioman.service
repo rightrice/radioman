@@ -1,15 +1,17 @@
 [Unit]
 Description=Radioman — Wi-Fi audit daemon
-After=network.target multi-user.target pisugar-server.service
-Wants=network.target pisugar-server.service
+After=network-online.target multi-user.target pisugar-server.service
+Wants=network-online.target pisugar-server.service
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/radioman
+# 30-second delay gives SSH a window to connect before Python eats all RAM
+ExecStartPre=/bin/sleep 30
 ExecStart=/opt/radioman/venv/bin/python3 /opt/radioman/radioman.py
 Restart=on-failure
-RestartSec=10
+RestartSec=60
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=radioman
