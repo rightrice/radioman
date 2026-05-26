@@ -54,6 +54,20 @@ else
   git -C "$NEXMON_DIR" pull -q
 fi
 
+# Pull LFS files — nexmon stores original firmware blobs in LFS.
+# These are needed to patch against (firmwares/bcm43430a1/7_45_41_46/).
+log "Pulling LFS objects (firmware source blobs)..."
+git -C "$NEXMON_DIR" lfs install
+git -C "$NEXMON_DIR" lfs pull --include="firmwares/bcm43430a1/7_45_41_46/*,$PATCH_DIR/*"
+
+# Verify the source firmware files are real binaries (not LFS pointers)
+FW_SRC="$NEXMON_DIR/firmwares/bcm43430a1/7_45_41_46"
+for f in "$FW_SRC/brcmfmac43430-sdio.bin" "$FW_SRC/ucode.bin"; do
+  SIZE=$(wc -c < "$f" 2>/dev/null || echo 0)
+  [ "$SIZE" -lt 1000 ] && err "LFS file too small: $f (${SIZE}B) — lfs pull may have failed"
+  info "LFS ok: $(basename $f) (${SIZE} bytes)"
+done
+
 # ── Build ──────────────────────────────────────────────────────────────────────
 cd "$NEXMON_DIR"
 
@@ -61,8 +75,15 @@ log "Setting up nexmon build environment..."
 source setup_env.sh
 
 log "Building nexmon base libraries..."
-make -j$(nproc) 2>&1 | grep -E "error:|warning:|Error" | head -20 || true
-make -j$(nproc) 2>&1 | tail -3
+BUILD_LOG="$NEXMON_DIR/build_base.log"
+set +e
+make -j$(nproc) 2>&1 | tee "$BUILD_LOG" | tail -5
+BUILD_EXIT=${PIPESTATUS[0]}
+set -e
+if [ $BUILD_EXIT -ne 0 ]; then
+  tail -20 "$BUILD_LOG"
+  err "Base build failed (exit $BUILD_EXIT)"
+fi
 
 PATCH_PATH="$NEXMON_DIR/$PATCH_DIR"
 [ ! -d "$PATCH_PATH" ] && err "Patch directory not found: $PATCH_PATH"
@@ -70,18 +91,16 @@ PATCH_PATH="$NEXMON_DIR/$PATCH_DIR"
 log "Building patched firmware for BCM43430A1..."
 cd "$PATCH_PATH"
 
-# Capture build output to log
-BUILD_LOG="$NEXMON_DIR/build.log"
+BUILD_LOG="$NEXMON_DIR/build_patch.log"
 set +e
 make -j$(nproc) 2>&1 | tee "$BUILD_LOG" | tail -10
 BUILD_EXIT=${PIPESTATUS[0]}
 set -e
 
 if [ $BUILD_EXIT -ne 0 ]; then
-  warn "Build returned exit code $BUILD_EXIT"
-  warn "Last 20 lines of build log:"
-  tail -20 "$BUILD_LOG"
-  err "Build failed — see $BUILD_LOG"
+  warn "Last 30 lines of build log:"
+  tail -30 "$BUILD_LOG"
+  err "Patch build failed (exit $BUILD_EXIT)"
 fi
 
 # ── Verify output ─────────────────────────────────────────────────────────────
