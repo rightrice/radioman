@@ -51,11 +51,13 @@ if [ ! -f "$FW_BLOB" ] || [ "$(wc -c < "$FW_BLOB")" -lt 10000 ]; then
   git -C "$NEXMON_DIR" sparse-checkout set "$PATCH_SUBDIR"
   git -C "$NEXMON_DIR" checkout -q
   git -C "$NEXMON_DIR" lfs install --local
-  git -C "$NEXMON_DIR" lfs pull --include="$PATCH_SUBDIR/brcmfmac43430-sdio.bin" 2>&1 | tail -3
+  git -C "$NEXMON_DIR" lfs pull 2>&1 | tail -5
+  info "Contents of patch dir:"
+  ls -lh "$NEXMON_DIR/$PATCH_SUBDIR/" 2>/dev/null || warn "Patch dir not found"
 fi
 
 [ ! -f "$FW_BLOB" ] && err "Firmware blob not found: $FW_BLOB"
-[ "$(wc -c < "$FW_BLOB")" -lt 10000 ] && err "Firmware blob too small — LFS pull may have failed"
+[ "$(wc -c < "$FW_BLOB")" -lt 10000 ] && err "Firmware blob too small ($(wc -c < "$FW_BLOB") bytes) — LFS pull failed"
 info "Nexmon firmware: $FW_BLOB"
 
 # ── Backup original firmware ───────────────────────────────────────────────────
