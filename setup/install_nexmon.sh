@@ -1,14 +1,11 @@
 #!/bin/bash
-# install_nexmon.sh — enable monitor mode on BCM43430/1 (Pi Zero W / Zero 2W)
+# install_nexmon.sh — install nexmon patched firmware to enable monitor mode
 #
-# The stock brcmfmac driver does not support monitor mode on this chip.
-# nexmon patches the WiFi firmware to unlock it.
+# Usage:
+#   sudo bash setup/install_nexmon.sh --from-file /tmp/brcmfmac43430-sdio.nexmon.bin
 #
-# Uses the pre-built firmware blob from seemoo-lab/nexmon — no compilation
-# required. The patched firmware (based on 7.45.41.46) replaces the stock
-# firmware (7.45.96) and the brcmfmac driver loads it without issue.
-#
-# Run: sudo bash setup/install_nexmon.sh
+# Build the firmware on WSL2 first:
+#   bash scripts/build_nexmon_wsl.sh [pi-host]
 
 set -e
 
@@ -23,10 +20,27 @@ warn() { echo -e "${YELLOW}[warning]${NC} $1"; }
 err()  { echo -e "${RED}[error]${NC} $1"; exit 1; }
 info() { echo -e "${BLUE}[info]${NC} $1"; }
 
-[ "$EUID" -ne 0 ] && err "Please run as root: sudo bash setup/install_nexmon.sh"
+[ "$EUID" -ne 0 ] && err "Please run as root: sudo bash setup/install_nexmon.sh --from-file <path>"
 
-# ── Locate firmware file ───────────────────────────────────────────────────────
-log "Locating firmware..."
+# ── Parse args ─────────────────────────────────────────────────────────────────
+FROM_FILE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --from-file) FROM_FILE="$2"; shift 2 ;;
+    *) err "Unknown argument: $1" ;;
+  esac
+done
+
+[ -z "$FROM_FILE" ] && err "Usage: sudo bash setup/install_nexmon.sh --from-file <firmware.bin>
+  Build the firmware first on WSL2:
+    bash scripts/build_nexmon_wsl.sh [pi-host]"
+
+[ ! -f "$FROM_FILE" ] && err "Firmware file not found: $FROM_FILE"
+SIZE=$(wc -c < "$FROM_FILE")
+[ "$SIZE" -lt 10000 ] && err "File too small (${SIZE} bytes) — not a valid firmware"
+info "Using pre-built firmware: $FROM_FILE (${SIZE} bytes)"
+
+# ── Locate system firmware ─────────────────────────────────────────────────────
 FW_FILE=""
 for f in /usr/lib/firmware/brcm/brcmfmac43430-sdio.bin \
           /lib/firmware/brcm/brcmfmac43430-sdio.bin; do
@@ -35,32 +49,7 @@ done
 [ -z "$FW_FILE" ] && err "brcmfmac43430-sdio.bin not found — is the WiFi driver loaded?"
 info "System firmware: $FW_FILE"
 
-# ── Install git if needed ──────────────────────────────────────────────────────
-apt-get install -y -qq git git-lfs
-
-# ── Clone nexmon and pull the firmware blob via LFS ───────────────────────────
-NEXMON_DIR="/opt/nexmon"
-PATCH_SUBDIR="patches/bcm43430a1/7_45_41_46/nexmon"
-FW_BLOB="$NEXMON_DIR/$PATCH_SUBDIR/brcmfmac43430-sdio.bin"
-
-if [ ! -f "$FW_BLOB" ] || [ "$(wc -c < "$FW_BLOB")" -lt 10000 ]; then
-  log "Cloning nexmon with LFS..."
-  rm -rf "$NEXMON_DIR"
-  git clone --depth=1 --filter=blob:none --sparse -q \
-    https://github.com/seemoo-lab/nexmon "$NEXMON_DIR"
-  git -C "$NEXMON_DIR" sparse-checkout set "$PATCH_SUBDIR"
-  git -C "$NEXMON_DIR" checkout -q
-  git -C "$NEXMON_DIR" lfs install --local
-  git -C "$NEXMON_DIR" lfs pull 2>&1 | tail -5
-  info "Contents of patch dir:"
-  ls -lh "$NEXMON_DIR/$PATCH_SUBDIR/" 2>/dev/null || warn "Patch dir not found"
-fi
-
-[ ! -f "$FW_BLOB" ] && err "Firmware blob not found: $FW_BLOB"
-[ "$(wc -c < "$FW_BLOB")" -lt 10000 ] && err "Firmware blob too small ($(wc -c < "$FW_BLOB") bytes) — LFS pull failed"
-info "Nexmon firmware: $FW_BLOB"
-
-# ── Backup original firmware ───────────────────────────────────────────────────
+# ── Backup original ────────────────────────────────────────────────────────────
 BACKUP="${FW_FILE}.orig"
 if [ ! -f "$BACKUP" ]; then
   cp "$FW_FILE" "$BACKUP"
@@ -69,12 +58,12 @@ else
   info "Backup already exists — skipping"
 fi
 
-# ── Install patched firmware ───────────────────────────────────────────────────
+# ── Install ────────────────────────────────────────────────────────────────────
 log "Installing nexmon patched firmware..."
-cp "$FW_BLOB" "$FW_FILE"
+cp "$FROM_FILE" "$FW_FILE"
 
 # ── Reload driver ──────────────────────────────────────────────────────────────
-log "Reloading brcmfmac..."
+log "Reloading brcmfmac with patched firmware..."
 ip link set wlan0 down 2>/dev/null || true
 modprobe -r brcmfmac 2>/dev/null || true
 sleep 2
@@ -100,11 +89,10 @@ log "━━━━━━━━━━━━━━━━━━━━━━━━━
 log " nexmon install complete"
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-warn "Reboot required to load the patched firmware cleanly:"
-warn "  sudo reboot"
+warn "Reboot to load the patched firmware cleanly: sudo reboot"
 echo ""
-info "After reboot, verify with:"
-info "  sudo iw dev wlan0 set type monitor && echo OK && sudo iw dev wlan0 set type managed"
+info "After reboot, verify:"
+info "  sudo iw dev wlan0 set type monitor && echo 'monitor mode OK' && sudo iw dev wlan0 set type managed"
 info ""
-info "To restore the original firmware:"
+info "To restore original firmware:"
 info "  sudo cp ${BACKUP} ${FW_FILE} && sudo reboot"

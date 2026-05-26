@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED BY WSL
 # Build llama-cli on a Pi 4 and transfer it to the Pi Zero 2W.
 # Run on the Pi 4 via SSH:
 #   bash build_llama_pi4.sh [pi_zero_ip]
