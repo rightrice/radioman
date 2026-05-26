@@ -94,10 +94,13 @@ PATCH_PATH="$NEXMON_DIR/$PATCH_DIR"
 
 log "Building patched firmware for BCM43430A1..."
 cd "$PATCH_PATH"
+# nexmon patch Makefile creates tmp/obj as order-only prerequisites;
+# parallel make races them — pre-create to avoid "mv: cannot stat 'tmp'"
+mkdir -p tmp obj
 
 BUILD_LOG="$NEXMON_DIR/build_patch.log"
 set +e
-make -j$(nproc) 2>&1 | tee "$BUILD_LOG" | tail -10
+make 2>&1 | tee "$BUILD_LOG" | tail -10
 BUILD_EXIT=${PIPESTATUS[0]}
 set -e
 
