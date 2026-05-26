@@ -44,6 +44,10 @@ sudo apt-get install -y -qq \
   libgmp-dev gawk qpdf flex bison libfl-dev \
   build-essential autoconf automake libtool pkg-config \
   libssl-dev
+# nexmon bundles a 32-bit x86 ARM cross-compiler — needs 32-bit libs on x86_64
+sudo dpkg --add-architecture i386 2>/dev/null || true
+sudo apt-get update -qq
+sudo apt-get install -y -qq libc6-i386 lib32stdc++6 lib32z1
 
 # ── Clone nexmon ──────────────────────────────────────────────────────────────
 if [ ! -d "$NEXMON_DIR/.git" ]; then
