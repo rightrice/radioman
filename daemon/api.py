@@ -115,6 +115,7 @@ def create_app(state: dict) -> Flask:
             filepath=row["filename"],
             bssid=row["bssid"] or "",
             ssid=row["ssid"] or "",
+            cap_type=row.get("type", "EAPOL"),
         )
         state["crack_queue"].enqueue(job)
         return jsonify({"queued": True, "capture_id": capture_id})

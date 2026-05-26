@@ -146,7 +146,9 @@ class Display:
         if not self._ready:
             return
 
-        key = f"{personality.get('mood')}|{stats}|{battery.get('percent')}"
+        key = (f"{personality.get('mood')}|{battery.get('percent')}|"
+               f"{stats.get('networks')}|{stats.get('clients')}|"
+               f"{stats.get('captures')}|{stats.get('cracked')}")
         if key == self._last:
             return
 

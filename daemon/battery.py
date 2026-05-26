@@ -22,27 +22,31 @@ def _pisugar_cmd(cmd: str) -> str:
 def _read_i2c_direct() -> dict:
     """
     Read PiSugar 2 (IP5209) directly over I2C.
-    Voltage from registers 0xa2/0xa3; charging from register 0x02 bit 0.
-    Voltage-to-percent curve matches pisugar2 library behaviour.
+    Matches jayofelony/pwnagotchi register layout:
+      Voltage: 0xa2 (low byte) + 0xa3 (high byte, sign at bit 0x20)
+      Charging: register 0x55 bit 4
     """
     try:
         import smbus2
         bus = smbus2.SMBus(_I2C_BUS)
-        v_high = bus.read_byte_data(_I2C_ADDR, 0xa2)
-        v_low  = bus.read_byte_data(_I2C_ADDR, 0xa3)
-        status = bus.read_byte_data(_I2C_ADDR, 0x02)
+        v_low  = bus.read_byte_data(_I2C_ADDR, 0xa2)
+        v_high = bus.read_byte_data(_I2C_ADDR, 0xa3)
+        chg_reg = bus.read_byte_data(_I2C_ADDR, 0x55)
         bus.close()
 
-        # Reconstruct 10-bit ADC value, convert to volts
-        v_raw = ((v_high & 0x3f) << 4) | ((v_low >> 4) & 0x0f)
-        voltage = (2600 + v_raw * 0.26855) / 1000
+        # Reconstruct voltage per IP5209 datasheet / pwnagotchi reference
+        v_raw = (v_high << 8) + v_low
+        # Sign bit in 0xa3 (high byte) at 0x20 — negative means below baseline
+        if v_high & 0x20:
+            voltage = (2600 - (v_raw & 0x1fff) * 0.26855) / 1000
+        else:
+            voltage = (2600 + v_raw * 0.26855) / 1000
 
         # Linear approximation of IP5209 discharge curve (3.0V=0%, 4.1V=100%)
         pct = int(min(100, max(0, (voltage - 3.0) / (4.1 - 3.0) * 100)))
 
-        # IP5209 register 0x02 bit 4 (0x10) = charging in progress
-        # Bit 5 (0x20) = charging done. Either means USB power connected.
-        charging = bool(status & 0x30)
+        # Register 0x55 bit 4: charging in progress (per pwnagotchi / PiSugar I2C manual)
+        charging = bool(chg_reg & 0x10)
 
         return {
             "percent":  pct,

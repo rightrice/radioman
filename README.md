@@ -1,4 +1,4 @@
-# radioman 📡
+# radioman
 
 A tamagotchi-style Wi-Fi audit console for the Raspberry Pi Zero 2W.
 Combines the spirit of Pwnagotchi, Ubiquiti WiFiman, and the Aircrack-ng suite.
@@ -11,27 +11,40 @@ Combines the spirit of Pwnagotchi, Ubiquiti WiFiman, and the Aircrack-ng suite.
 | Battery | PiSugar 2 |
 | Display | Waveshare 2.13" e-ink (250×122) |
 | Radio | Internal CYW43439 (monitor mode) |
-| Adapter *(future)* | Alfa AWUS036ACH via micro-USB OTG |
 
 ## Features
 
 - **Passive Wi-Fi scanning** via bettercap — discovers APs and associated clients
-- **Handshake capture** — PMKID and EAPOL, saved as `.pcap` files
-- **Auto-crack queue** — aircrack-ng + rockyou wordlist, runs automatically on each capture
-- **Network graph** — airgraph-ng-style AP↔client relationship canvas
+- **Handshake capture** — PMKID and EAPOL, saved as `.pcapng` files with dashboard download
+- **Auto-crack queue** — hashcat (PMKID) + aircrack-ng (EAPOL) with rockyou wordlist
+- **Network graph** — AP↔client relationship canvas
 - **LAN host discovery** — passive ARP + on-demand nmap scan
+- **Local AI assistant** — IBM Granite 4.0 350M running via llama.cpp, chat + network analysis
+- **XPLT cloud sync** — pushes networks, clients, and captures to the XPLT platform
 - **Tamagotchi personality** — mood engine with ASCII faces on the e-ink display
-- **PiSugar 2 battery** — heart-strip display, charging indicator
-- **Web dashboard** — aspect2020 design system, dark/light theme, auto-refresh
+- **PiSugar 2 battery** — heart-strip display, charging indicator via direct I2C
+- **Web dashboard** — dark/light theme, auto-refresh, capture downloads
 
-## Quick Start
+---
+
+## Install
 
 ### 1. Flash Pi OS
 
-Download **Raspberry Pi OS Lite 64-bit (Bookworm)** and flash to SD card.
-Enable SSH in the Raspberry Pi Imager advanced settings.
+Flash **Raspberry Pi OS Lite 64-bit (Bookworm)** to SD card using Raspberry Pi Imager.
+In Imager advanced settings: enable SSH, set hostname to `radioman`, set username `pi`.
 
-### 2. Install
+### 2. First boot
+
+SSH in over WiFi:
+```bash
+ssh pi@radioman.local
+```
+
+> **Note:** bettercap puts `wlan0` into monitor mode during scanning — WiFi SSH drops.
+> Use the USB cable (10.55.0.1) as your primary management connection after setup.
+
+### 3. Clone and install
 
 ```bash
 git clone https://github.com/rightrice/radioman
@@ -40,34 +53,125 @@ sudo bash setup/install.sh
 sudo reboot
 ```
 
-### 3. Access
+`install.sh` configures swap, zram, SPI, I2C, USB gadget ethernet, bettercap, aircrack-ng, hcxtools, hashcat, and the radioman systemd service.
 
+### 4. USB gadget ethernet (recommended)
+
+After reboot, connect the Pi to your Mac via USB data cable and run:
+
+```bash
+bash scripts/mac_connect.sh
 ```
-Web dashboard:  http://<pi-ip>:8080
-Logs:           journalctl -u radioman -f
-Captures:       /opt/radioman/captures/
+
+This sets your Mac USB interface to `10.55.0.2` and verifies the Pi is reachable at `10.55.0.1`.
+
+SSH over USB:
+```bash
+ssh pi@10.55.0.1
 ```
+
+### 5. Configure
+
+Edit `/opt/radioman/radioman.conf`:
+
+```ini
+[radioman]
+interface = wlan0
+web_port = 8080
+
+[capture]
+bettercap_user = user
+bettercap_pass = pass
+
+[cracker]
+wordlist = /opt/radioman/wordlists/rockyou.txt
+
+[display]
+model = epd2in13_V4    # match your Waveshare version
+rotate = 180
+
+[database]
+rssi_history_hours = 24
+
+[xplt]
+device_token =         # set after pairing in dashboard
+```
+
+### 6. Install AI (optional)
+
+The AI assistant requires a pre-built `llama-cli` binary (cross-compile from a more powerful machine) and the Granite model download.
+
+**Step 1 — Build llama-cli** (run on WSL2 Ubuntu or a Linux machine, not the Pi):
+```bash
+bash scripts/build_llama_wsl.sh radioman.local
+```
+Then on the Pi:
+```bash
+sudo mkdir -p /opt/radioman/llama
+sudo mv /tmp/llama-cli /opt/radioman/llama/llama-cli
+sudo chmod +x /opt/radioman/llama/llama-cli
+```
+
+**Step 2 — Download Granite model** (run on the Pi):
+```bash
+sudo bash setup/install_ai.sh
+```
+
+Downloads IBM Granite 4.0 350M Q4_K_M (~230MB). Inference takes ~60s per response on the Pi Zero 2W.
+
+---
+
+## Update
+
+After `git pull`, run:
+
+```bash
+sudo bash setup/update.sh
+```
+
+Updates daemon files, web assets, caplet, and service. Never touches `radioman.conf`, `captures/`, or `wordlists/`.
+
+---
+
+## Access
+
+| Interface | Address |
+|---|---|
+| Web dashboard | `http://radioman.local:8080` |
+| USB SSH | `ssh pi@10.55.0.1` |
+| WiFi SSH | `ssh pi@radioman.local` (only when not scanning) |
+| Logs | `journalctl -u radioman -f` |
+| Captures | `/opt/radioman/captures/` |
+
+---
 
 ## Project Structure
 
 ```
 radioman/
 ├── config/
-│   └── radioman.conf       # Main configuration
+│   └── radioman.conf.example   # Config template
 ├── daemon/
-│   ├── radioman.py         # Main orchestrator
-│   ├── api.py              # Flask REST API + static serving
-│   ├── capture.py          # bettercap integration
-│   ├── cracker.py          # aircrack-ng queue
-│   ├── scanner.py          # Network discovery (ARP + nmap)
-│   ├── personality.py      # Mood engine + ASCII faces
-│   ├── display.py          # Waveshare e-ink driver
-│   ├── battery.py          # PiSugar 2 I2C integration
-│   └── db.py               # SQLite database
+│   ├── radioman.py             # Main orchestrator
+│   ├── api.py                  # Flask REST API + static serving
+│   ├── ai.py                   # IBM Granite AI engine (llama.cpp)
+│   ├── capture.py              # bettercap integration
+│   ├── cracker.py              # hashcat + aircrack-ng queue
+│   ├── scanner.py              # Network discovery (ARP + nmap)
+│   ├── personality.py          # Mood engine + ASCII faces
+│   ├── display.py              # Waveshare e-ink driver
+│   ├── battery.py              # PiSugar 2 I2C integration
+│   ├── db.py                   # SQLite database
+│   └── xplt.py                 # XPLT cloud sync
+├── scripts/
+│   ├── mac_connect.sh          # Mac-side USB gadget setup
+│   └── build_llama_wsl.sh      # Cross-compile llama-cli (WSL2)
 ├── setup/
-│   ├── install.sh          # Full install script
-│   ├── radioman.service    # systemd service
-│   └── radioman.cap        # bettercap caplet
+│   ├── install.sh              # Full install script
+│   ├── install_ai.sh           # AI model + binary installer
+│   ├── update.sh               # Update deployed files
+│   ├── radioman.service        # systemd service
+│   └── radioman.cap            # bettercap caplet
 └── web/
     ├── index.html
     └── assets/
@@ -78,41 +182,31 @@ radioman/
             └── dashboard.js    # Dashboard logic
 ```
 
-## Configuration
-
-Edit `/opt/radioman/radioman.conf` (or `config/radioman.conf` before install):
-
-```ini
-[radioman]
-interface = wlan0       # Monitor mode interface
-web_port = 8080
-
-[capture]
-bettercap_user = user
-bettercap_pass = pass   # Change before deploying
-
-[cracker]
-wordlist = /opt/radioman/wordlists/rockyou.txt
-
-[display]
-model = epd2in13_V3     # Match your Waveshare version
-rotate = 180
-```
+---
 
 ## API Endpoints
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/status` | Personality, battery, stats |
+| GET | `/api/status` | Personality, battery, scan stats |
 | GET | `/api/networks` | All discovered APs |
 | GET | `/api/clients` | All discovered clients |
 | GET | `/api/captures` | Handshake captures |
-| POST | `/api/crack/<id>` | Trigger crack for capture |
+| GET | `/api/captures/<id>/download` | Download pcapng file |
+| POST | `/api/crack/<id>` | Queue crack for capture |
 | GET | `/api/graph` | Graph nodes + edges |
 | GET | `/api/hosts` | LAN hosts (ARP) |
 | POST | `/api/hosts/scan` | Run nmap scan |
 | GET | `/api/events` | Event log |
 | POST | `/api/cmd` | Send bettercap command |
+| GET | `/api/xplt/status` | XPLT sync status |
+| POST | `/api/xplt/pair` | Pair with XPLT |
+| POST | `/api/xplt/sync` | Trigger manual sync |
+| GET | `/api/ai/status` | AI engine status |
+| POST | `/api/ai/chat` | Chat with Granite |
+| POST | `/api/ai/analyze` | Analyze networks or passwords |
+
+---
 
 ## Legal
 
@@ -121,4 +215,4 @@ The authors are not responsible for misuse.
 
 ---
 
-*Built with bettercap, aircrack-ng, Flask, and the aspect2020 design system.* 
+*Built with bettercap, aircrack-ng, llama.cpp, Flask, and the aspect2020 design system.*
