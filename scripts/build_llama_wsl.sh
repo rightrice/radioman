@@ -66,7 +66,6 @@ cmake -B "$TMP/llama.cpp/build" \
   -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
   -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
   -DBUILD_SHARED_LIBS=OFF \
-  -DLLAMA_BUILD_SERVER=OFF \
   -DLLAMA_BUILD_TESTS=OFF \
   -DLLAMA_BUILD_EXAMPLES=ON \
   -DCMAKE_C_FLAGS="-O2" \
@@ -96,15 +95,19 @@ if [ $BUILD_EXIT -ne 0 ]; then
 fi
 
 # ── Locate binary ─────────────────────────────────────────────────────────────
-# Search broadly — binary name and location vary across llama.cpp versions
+# Search broadly — binary name changed across llama.cpp versions:
+#   older:  examples/bin/llama-cli  or  build/bin/main
+#   newer:  build/bin/llama  (unified app combining CLI + server)
 BUILT=$(find "$TMP/llama.cpp/build" -name "llama-cli" -type f 2>/dev/null | head -1)
+[ -z "$BUILT" ] && \
+  BUILT=$(find "$TMP/llama.cpp/build/bin" -name "llama" -type f 2>/dev/null | head -1)
 [ -z "$BUILT" ] && \
   BUILT=$(find "$TMP/llama.cpp/build" -name "main" -type f 2>/dev/null | head -1)
 
 if [ -z "$BUILT" ]; then
   echo ""
-  warn "Could not find llama-cli or main. Executables found in build/:"
-  find "$TMP/llama.cpp/build" -type f -executable 2>/dev/null | grep -v "\.cmake\|Makefile" | head -20
+  warn "Could not find inference binary. Executables in build/bin/:"
+  find "$TMP/llama.cpp/build" -path "*/bin/*" -type f 2>/dev/null | head -20
   echo ""
   err "Binary not found — check build log at $BUILD_LOG"
 fi
