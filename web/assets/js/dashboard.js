@@ -66,11 +66,14 @@ async function poll() {
     setStatus(true);
     document.getElementById("rmLoading")?.remove();
     updateUptime(status.personality?.uptime_seconds || 0);
-    // Don't re-render if the user is actively typing in a form field —
-    // this prevents the pairing inputs from being wiped mid-entry.
+    // Don't re-render if the user is actively typing or has content in the
+    // XPLT pairing fields — prevents inputs from being wiped mid-entry.
     const active = document.activeElement;
     const userTyping = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
-    if (!userTyping) {
+    const pairCode = document.getElementById("rmPairCode");
+    const pairName = document.getElementById("rmPairName");
+    const userHasInput = pairCode?.value || pairName?.value;
+    if (!userTyping && !userHasInput) {
       renderMain(status, data, xplt || null);
     }
   } catch (e) {
