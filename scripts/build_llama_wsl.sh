@@ -78,16 +78,36 @@ cmake -B "$TMP/llama.cpp/build" \
 # WSL2 has plenty of RAM — use all available cores
 CORES=$(nproc)
 log "Building with -j${CORES} (cross-compile, ~5-10 min)..."
+
+BUILD_LOG="$OUT_DIR/build.log"
+set +e
 cmake --build "$TMP/llama.cpp/build" \
   --config Release \
   -j"${CORES}" \
-  2>&1 | grep -v "^\[" | tail -5
+  > "$BUILD_LOG" 2>&1
+BUILD_EXIT=$?
+set -e
+
+# Always show last 20 lines so errors are visible
+tail -20 "$BUILD_LOG"
+
+if [ $BUILD_EXIT -ne 0 ]; then
+  err "cmake build failed (exit $BUILD_EXIT) — full log: $BUILD_LOG"
+fi
 
 # ── Locate binary ─────────────────────────────────────────────────────────────
+# Search broadly — binary name and location vary across llama.cpp versions
 BUILT=$(find "$TMP/llama.cpp/build" -name "llama-cli" -type f 2>/dev/null | head -1)
 [ -z "$BUILT" ] && \
   BUILT=$(find "$TMP/llama.cpp/build" -name "main" -type f 2>/dev/null | head -1)
-[ -z "$BUILT" ] && err "Build failed — llama-cli binary not found under build/"
+
+if [ -z "$BUILT" ]; then
+  echo ""
+  warn "Could not find llama-cli or main. Executables found in build/:"
+  find "$TMP/llama.cpp/build" -type f -executable 2>/dev/null | grep -v "\.cmake\|Makefile" | head -20
+  echo ""
+  err "Binary not found — check build log at $BUILD_LOG"
+fi
 
 cp "$BUILT" "$LLAMA_BIN"
 chmod +x "$LLAMA_BIN"
