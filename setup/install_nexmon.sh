@@ -36,23 +36,26 @@ done
 info "System firmware: $FW_FILE"
 
 # ── Install git if needed ──────────────────────────────────────────────────────
-command -v git &>/dev/null || apt-get install -y -qq git
+apt-get install -y -qq git git-lfs
 
-# ── Clone nexmon (sparse — we only need the firmware blob) ────────────────────
+# ── Clone nexmon and pull the firmware blob via LFS ───────────────────────────
 NEXMON_DIR="/opt/nexmon"
 PATCH_SUBDIR="patches/bcm43430a1/7_45_41_46/nexmon"
 FW_BLOB="$NEXMON_DIR/$PATCH_SUBDIR/brcmfmac43430-sdio.bin"
 
-if [ ! -f "$FW_BLOB" ]; then
-  log "Cloning nexmon (sparse checkout — firmware blob only)..."
+if [ ! -f "$FW_BLOB" ] || [ "$(wc -c < "$FW_BLOB")" -lt 10000 ]; then
+  log "Cloning nexmon with LFS..."
   rm -rf "$NEXMON_DIR"
   git clone --depth=1 --filter=blob:none --sparse -q \
     https://github.com/seemoo-lab/nexmon "$NEXMON_DIR"
   git -C "$NEXMON_DIR" sparse-checkout set "$PATCH_SUBDIR"
   git -C "$NEXMON_DIR" checkout -q
+  git -C "$NEXMON_DIR" lfs install --local -q
+  git -C "$NEXMON_DIR" lfs pull --include="$PATCH_SUBDIR/brcmfmac43430-sdio.bin"
 fi
 
-[ ! -f "$FW_BLOB" ] && err "Firmware blob not found after checkout: $FW_BLOB"
+[ ! -f "$FW_BLOB" ] && err "Firmware blob not found: $FW_BLOB"
+[ "$(wc -c < "$FW_BLOB")" -lt 10000 ] && err "Firmware blob too small — LFS pull may have failed"
 info "Nexmon firmware: $FW_BLOB"
 
 # ── Backup original firmware ───────────────────────────────────────────────────

@@ -221,6 +221,13 @@ else
   warn "  Add:  modules-load=dwc2,g_ether  anywhere in the single line"
 fi
 
+# Fix g_ether MAC — random MAC per boot causes macOS to treat it as a new device
+# each reboot, losing the System Settings network profile. Persistent MACs fix this.
+cat > /etc/modprobe.d/g_ether.conf <<'EOF'
+options g_ether host_addr=72:48:4f:52:4d:01 dev_addr=72:48:4f:52:4d:02
+EOF
+log "g_ether: persistent MAC configured"
+
 # Configure usb0 with a static IP so SSH over USB works without DHCP
 if command -v nmcli &>/dev/null; then
   nmcli connection delete "usb-gadget" 2>/dev/null || true

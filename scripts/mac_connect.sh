@@ -22,15 +22,23 @@ USB_NET="10.55.0.0/24"
 # ── Find the USB gadget interface ──────────────────────────────────────────────
 USB_IFACE=""
 
-# Look for a recently-appeared interface that isn't a known system interface
+# Look for the USB gadget interface.
+# On macOS, RNDIS/CDC-ECM gadgets appear as anpi* (Apple Network Proxy Interface).
+# Prefer an anpi* with status:active; fall back to any anpi* if none are active.
+# Skip known system interfaces.
+FALLBACK_IFACE=""
 for iface in $(ifconfig -lu 2>/dev/null); do
   case "$iface" in lo*|en0|en1|en2|en3|utun*|bridge*|gif*|stf*|ap*|awdl*|llw*) continue ;; esac
-  # Check if it looks like a USB ethernet gadget (has "RNDIS" or "ECM" or is "EthernetX")
   if ifconfig "$iface" 2>/dev/null | grep -qiE "ether|ethernet"; then
-    USB_IFACE="$iface"
-    break
+    STATUS=$(ifconfig "$iface" 2>/dev/null | awk '/status:/{print $2}')
+    if [ "$STATUS" = "active" ]; then
+      USB_IFACE="$iface"
+      break
+    fi
+    [ -z "$FALLBACK_IFACE" ] && FALLBACK_IFACE="$iface"
   fi
 done
+[ -z "$USB_IFACE" ] && USB_IFACE="$FALLBACK_IFACE"
 
 if [ -z "$USB_IFACE" ]; then
   echo "ERROR: No USB gadget interface found."

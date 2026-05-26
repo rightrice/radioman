@@ -57,7 +57,7 @@ sudo reboot
 
 ### 4. USB gadget ethernet (recommended)
 
-After reboot, connect the Pi to your Mac via USB data cable and run:
+After reboot, connect the Pi to your Mac via USB **data** cable (not the PWR port) and run:
 
 ```bash
 bash scripts/mac_connect.sh
@@ -68,6 +68,26 @@ This sets your Mac USB interface to `10.55.0.2` and verifies the Pi is reachable
 SSH over USB:
 ```bash
 ssh pi@10.55.0.1
+```
+
+**If the USB interface shows "Self-assigned IP" or `169.254.x.x` in System Settings:**
+
+macOS found the gadget but assigned a DHCP link-local address. Fix it manually:
+
+1. Open **System Settings → Network**
+2. Find **RNDIS/Ethernet Gadget** (or Raspberry Pi USB Gadget)
+3. Click **Details → TCP/IP**
+4. Set Configure IPv4: **Manually**, IP: `10.55.0.2`, Mask: `255.255.255.0`
+
+This happens because macOS tries DHCP and the Pi doesn't run a DHCP server on `usb0`. The setting persists across reboots once saved.
+
+**If the USB gadget disappears after every reboot:**
+
+The `g_ether` kernel module randomises its MAC by default — macOS sees a new device each boot. `install.sh` sets a persistent MAC via `/etc/modprobe.d/g_ether.conf`, so this should not happen on a fresh install. If it does, run on the Pi:
+
+```bash
+echo "options g_ether host_addr=72:48:4f:52:4d:01 dev_addr=72:48:4f:52:4d:02" | sudo tee /etc/modprobe.d/g_ether.conf
+sudo rmmod g_ether && sudo modprobe g_ether
 ```
 
 ### 5. Configure
