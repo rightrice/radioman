@@ -83,7 +83,9 @@ else
     BUILD_FROM_SOURCE=false
   fi
 
-  TMP=$(mktemp -d)
+  # Use /var/tmp (disk-backed) not /tmp (tmpfs/RAM) — llama.cpp build produces
+  # several GB of object files that will exhaust RAM-backed /tmp on a Pi Zero 2W.
+  TMP=$(mktemp -d -p /var/tmp)
   trap 'rm -rf "$TMP"' EXIT
 
   if $BUILD_FROM_SOURCE; then
