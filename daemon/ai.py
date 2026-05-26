@@ -17,7 +17,7 @@ from typing import Optional
 log = logging.getLogger("ai")
 
 LLAMA_CLI  = os.environ.get("LLAMA_CLI",  "/opt/radioman/llama/llama-cli")
-MODEL_PATH = os.environ.get("RADIOMAN_MODEL", "/opt/radioman/models/granite.gguf")
+MODEL_PATH = os.environ.get("RADIOMAN_MODEL", "/opt/radioman/models/granite-4.0-350m-Q4_K_M.gguf")
 
 N_PREDICT = 400
 CTX_SIZE  = 1024   # system prompt + live context + conversation

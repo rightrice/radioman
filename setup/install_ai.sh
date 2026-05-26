@@ -11,12 +11,12 @@ set -e
 RADIOMAN_DIR="/opt/radioman"
 LLAMA_DIR="$RADIOMAN_DIR/llama"
 MODEL_DIR="$RADIOMAN_DIR/models"
-MODEL_FILE="$MODEL_DIR/granite.gguf"
+MODEL_FILE="$MODEL_DIR/granite-4.0-350m-Q4_K_M.gguf"
 LLAMA_BIN="$LLAMA_DIR/llama-cli"
 
-# Model: IBM Granite 3.2 1B A400M Instruct at Q2_K quantization (~400MB)
-MODEL_REPO="bartowski/granite-3.2-1b-a400m-instruct-GGUF"
-MODEL_FILENAME="granite-3.2-1b-a400m-instruct-Q2_K.gguf"
+# Model: IBM Granite 4.0 350M Q4_K_M (~230MB) — official IBM GGUF repo, no auth required
+MODEL_REPO="ibm-granite/granite-4.0-350m-GGUF"
+MODEL_FILENAME="granite-4.0-350m-Q4_K_M.gguf"
 HF_BASE="https://huggingface.co"
 
 RED='\033[0;31m'
@@ -230,7 +230,7 @@ if [ -f "$CONF" ]; then
 # Path to llama-cli binary (set by install_ai.sh)
 llama_cli = /opt/radioman/llama/llama-cli
 # Path to GGUF model file
-model = /opt/radioman/models/granite.gguf
+model = /opt/radioman/models/granite-4.0-350m-Q4_K_M.gguf
 EOF
     log "Added [ai] section to radioman.conf"
   else
