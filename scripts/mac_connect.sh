@@ -4,7 +4,7 @@
 # Usage:
 #   bash scripts/mac_connect.sh            — just SSH-ready (no internet sharing)
 #   bash scripts/mac_connect.sh share      — SSH + share your Mac's internet to the Pi
-#   bash scripts/mac_connect.sh share en0  — specify upstream interface (default: en0)
+#   bash scripts/mac_connect.sh share en1  — specify upstream interface (auto-detected)
 #
 # Pi IP:  10.55.0.1  (set by radioman install)
 # Mac IP: 10.55.0.2  (set by this script)
@@ -14,7 +14,10 @@
 set -e
 
 MODE=${1:-}
-UPSTREAM=${2:-en0}
+# Auto-detect upstream: interface that holds the default route (usually en1 on
+# Mac Mini/MacBook when on WiFi, en0 on machines with wired-only internet)
+DEFAULT_UPSTREAM=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}' || echo "en0")
+UPSTREAM=${2:-$DEFAULT_UPSTREAM}
 PI_IP="10.55.0.1"
 MAC_IP="10.55.0.2"
 USB_NET="10.55.0.0/24"
