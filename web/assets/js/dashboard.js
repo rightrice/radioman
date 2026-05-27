@@ -160,26 +160,23 @@ function viewOverview(status, xplt, recentNets = [], recentEvents = []) {
 
   return `
     <div class="rm-overview-grid">
-      <div class="rm-face-card">
-        <div class="rm-mascot-wrap rm-mood-${esc(p.mood || "default")}">
-          <img class="rm-mascot" src="/assets/img/radioman.png" alt="radioman" />
+      <div class="rm-status-card">
+        <div class="rm-scan-indicator ${scanning ? "rm-scan-indicator--on" : "rm-scan-indicator--off"}">
+          <div class="rm-scan-indicator-dot"></div>
+          <span class="rm-mono">${scanning ? "SCANNING" : "IDLE"}</span>
         </div>
-        <div class="rm-mood-badge rm-mood-badge--${esc(p.mood || "default")}">${esc(p.mood || "default")}</div>
-        <div class="rm-face-message">${esc(p.message || "")}</div>
+        <div class="rm-status-msg">${esc(p.message || "standing by")}</div>
         <div class="rm-battery">
           <span class="rm-hearts">${hearts}</span>
           <span class="rm-mono">${pct >= 0 ? pct + "%" : "—"}</span>
           ${chrg}
         </div>
-        <div style="margin-top:0.75rem">
+        <div style="margin-top:auto; padding-top:1rem">
           <button id="rmScanToggleBtn"
             class="rm-btn ${scanning ? "rm-btn-danger" : "rm-btn-primary"}"
             style="width:100%">
             ${scanning ? "⏹ Stop Scanning" : "▶ Start Scanning"}
           </button>
-          <div class="rm-scan-status ${scanning ? "rm-scan-on" : "rm-scan-off"}">
-            ${scanning ? "● scanning" : "○ idle"}
-          </div>
         </div>
       </div>
       <div class="rm-kpi-row">
@@ -187,7 +184,6 @@ function viewOverview(status, xplt, recentNets = [], recentEvents = []) {
         ${kpi("Clients", s.clients ?? 0, "teal")}
         ${kpi("Handshakes", s.captures ?? 0, s.captures > 0 ? "ok" : "")}
         ${kpi("Cracked", s.cracked ?? 0, s.cracked > 0 ? "ok" : "")}
-        ${kpi("Happiness", pct2bar(p.happiness ?? 0.5), "")}
         ${kpi("Queue", cq.queued ?? 0, cq.queued > 0 ? "warn" : "")}
       </div>
     </div>

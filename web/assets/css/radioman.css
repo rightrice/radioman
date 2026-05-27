@@ -227,47 +227,55 @@ body {
 .rm-red    { color: var(--rm-red); }
 .rm-teal   { color: var(--rm-teal); }
 
-/* ── Face card ──────────────────────────────────────────────── */
-.rm-face-card {
+/* ── Status card (left panel of overview grid) ──────────────── */
+.rm-status-card {
   background: var(--aap-surface);
   border: 1px solid var(--aap-line);
   border-radius: 6px;
-  padding: 1.5rem;
+  padding: 1.25rem 1.5rem;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  text-align: center;
+  gap: 0.75rem;
   min-height: 160px;
 }
 
-.rm-face {
-  font-size: 2.2rem;
-  line-height: 1;
-  font-family: var(--rm-mono);
-  letter-spacing: -0.02em;
-}
-
-.rm-mood-badge {
-  display: inline-flex;
+.rm-scan-indicator {
+  display: flex;
   align-items: center;
-  padding: 0.2rem 0.6rem;
-  border-radius: 3px;
+  gap: 0.6rem;
   font-family: var(--rm-mono);
-  font-size: 0.68rem;
+  font-size: 0.9rem;
   font-weight: 700;
-  letter-spacing: 0.10em;
-  text-transform: uppercase;
-  background: var(--rm-teal-soft);
-  color: var(--rm-teal);
-  border: 1px solid rgba(217, 98, 42, 0.25);
+  letter-spacing: 0.1em;
 }
 
-.rm-face-message {
-  font-size: 0.83rem;
+.rm-scan-indicator-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.rm-scan-indicator--on  { color: var(--rm-teal); }
+.rm-scan-indicator--off { color: var(--aap-muted); }
+
+.rm-scan-indicator--on  .rm-scan-indicator-dot {
+  background: var(--rm-teal);
+  box-shadow: 0 0 6px rgba(217, 98, 42, 0.6);
+  animation: rm-dot-pulse 2s ease-in-out infinite;
+}
+.rm-scan-indicator--off .rm-scan-indicator-dot { background: var(--aap-muted); }
+
+@keyframes rm-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+.rm-status-msg {
+  font-size: 0.8rem;
   color: var(--aap-muted);
   font-family: var(--rm-mono);
+  line-height: 1.4;
 }
 
 /* ── Battery strip ──────────────────────────────────────────── */
@@ -619,117 +627,6 @@ body {
 .rm-scan-on  { color: var(--rm-teal); }
 .rm-scan-off { color: var(--aap-muted, #64748b); }
 
-/* ── Ghost mascot ───────────────────────────────────────────── */
-.rm-mascot-wrap {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.75rem 0;
-  transition: filter 400ms ease;
-}
-
-.rm-mascot {
-  width: 96px;
-  height: 96px;
-  object-fit: contain;
-  image-rendering: pixelated;
-  transition: transform 200ms ease, filter 400ms ease;
-}
-
-/* Float — default idle animation */
-@keyframes rm-float {
-  0%, 100% { transform: translateY(0); }
-  50%       { transform: translateY(-6px); }
-}
-
-/* Bounce — excited/cracked celebration */
-@keyframes rm-bounce {
-  0%, 100% { transform: translateY(0) scale(1); }
-  30%       { transform: translateY(-12px) scale(1.05); }
-  60%       { transform: translateY(-5px) scale(0.98); }
-}
-
-/* Shake — frustrated */
-@keyframes rm-shake {
-  0%, 100% { transform: translateX(0); }
-  20%       { transform: translateX(-5px) rotate(-2deg); }
-  40%       { transform: translateX(5px) rotate(2deg); }
-  60%       { transform: translateX(-4px) rotate(-1deg); }
-  80%       { transform: translateX(4px) rotate(1deg); }
-}
-
-/* Pulse — sleeping/tired */
-@keyframes rm-pulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.55; }
-}
-
-/* Glow — cracked */
-@keyframes rm-glow {
-  0%, 100% { filter: drop-shadow(0 0 6px rgba(52,211,153,0.5)); }
-  50%       { filter: drop-shadow(0 0 18px rgba(52,211,153,0.9)); }
-}
-
-/* Mood-specific animations */
-.rm-mood-default .rm-mascot,
-.rm-mood-happy .rm-mascot,
-.rm-mood-hunting .rm-mascot {
-  animation: rm-float 3s ease-in-out infinite;
-}
-
-.rm-mood-excited .rm-mascot {
-  animation: rm-bounce 0.7s ease-in-out infinite;
-}
-
-.rm-mood-cracked .rm-mascot {
-  animation: rm-bounce 0.6s ease-in-out infinite, rm-glow 1s ease-in-out infinite;
-  filter: drop-shadow(0 0 10px rgba(52,211,153,0.6));
-}
-
-.rm-mood-frustrated .rm-mascot {
-  animation: rm-shake 0.5s ease-in-out infinite;
-  filter: drop-shadow(0 0 8px rgba(248,113,113,0.5));
-}
-
-.rm-mood-sleeping .rm-mascot,
-.rm-mood-tired .rm-mascot {
-  animation: rm-pulse 3s ease-in-out infinite;
-  filter: brightness(0.7) saturate(0.5);
-}
-
-.rm-mood-bored .rm-mascot {
-  animation: rm-float 6s ease-in-out infinite;
-  filter: brightness(0.85) saturate(0.7);
-}
-
-/* Mood badge color variants */
-.rm-mood-badge--happy,
-.rm-mood-badge--hunting {
-  background: var(--rm-green-soft);
-  color: var(--rm-green);
-  border-color: rgba(52, 211, 153, 0.2);
-}
-
-.rm-mood-badge--excited,
-.rm-mood-badge--cracked {
-  background: var(--rm-green-soft);
-  color: var(--rm-green);
-  border-color: rgba(52, 211, 153, 0.3);
-}
-
-.rm-mood-badge--frustrated {
-  background: var(--rm-red-soft);
-  color: var(--rm-red);
-  border-color: rgba(248, 113, 113, 0.2);
-}
-
-.rm-mood-badge--bored,
-.rm-mood-badge--tired,
-.rm-mood-badge--sleeping {
-  background: var(--rm-amber-soft);
-  color: var(--rm-amber);
-  border-color: rgba(251, 191, 36, 0.2);
-}
 
 /* ── Ignore list ────────────────────────────────────────────── */
 .rm-ignore-form {

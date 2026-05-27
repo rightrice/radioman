@@ -169,6 +169,7 @@ class Radioman:
             try:
                 batt  = bat.read()
                 pers  = self.personality.snapshot()
+                pers["scanning"] = self.capture.scanning
                 stats = db.get_stats(self._db_path)
                 self.display.update(pers, stats, batt)
             except Exception as e:

@@ -7,18 +7,6 @@ from typing import Optional
 
 log = logging.getLogger("personality")
 
-FACES = {
-    "happy":      ["(^‿^)", "(^ᵕ^)", "(◕‿◕)"],
-    "excited":    ["(>‿<)", "(★‿★)", "(✿◠‿◠)"],
-    "bored":      ["(-‿-)", "(¬_¬)", "(-_-)zzz"],
-    "tired":      ["(=_=)", "(￣o￣)", "(。-ω-)"],
-    "frustrated": ["(>_<)", "(ò_ó)", "(╯°□°）╯"],
-    "sleeping":   ["(-.-)Zzz", "(￣ω￣)", "(¬д¬)"],
-    "hunting":    ["(ಠ_ಠ)", "(⊙_⊙)", "(ó‿ò)"],
-    "cracked":    ["(ﾉ◕ヮ◕)ﾉ", "(★^O^★)", "\\(^▽^)/"],
-    "default":    ["(•‿•)", "(◑‿◐)", "(｡◕‿◕｡)"],
-}
-
 MOODS = ["happy", "excited", "bored", "tired", "frustrated", "sleeping", "hunting", "default"]
 
 MESSAGES = {
@@ -37,7 +25,6 @@ MESSAGES = {
 @dataclass
 class State:
     mood:           str   = "default"
-    face:           str   = "(•‿•)"
     message:        str   = "radioman online"
     happiness:      float = 0.5
     boredom:        float = 0.0
@@ -50,7 +37,6 @@ class State:
     def to_dict(self) -> dict:
         return {
             "mood":           self.mood,
-            "face":           self.face,
             "message":        self.message,
             "happiness":      round(self.happiness, 2),
             "total_captures": self.total_captures,
@@ -113,11 +99,10 @@ class PersonalityEngine:
                 self._set_mood("hunting")
 
     def _set_mood(self, mood: str):
-        if mood not in FACES:
+        if mood not in MESSAGES:
             mood = "default"
         prev = self.state.mood
         self.state.mood    = mood
-        self.state.face    = random.choice(FACES[mood])
         self.state.message = random.choice(MESSAGES[mood])
         if prev != mood:
             log.info("Mood: %s → %s  \"%s\"", prev, mood, self.state.message)
