@@ -38,6 +38,8 @@ class CaptureEngine:
         self._iface       = config.get("interface", "wlan0")
         self._captures_dir = config.get("captures_dir", "/opt/radioman/captures")
         self._caplet      = config.get("caplet", "/opt/radioman/radioman.cap")
+        self._session     = requests.Session()
+        self._session.auth = self._auth
 
     @property
     def _api(self) -> str:
@@ -45,9 +47,9 @@ class CaptureEngine:
 
     def _bc(self, method: str, path: str, **kwargs):
         try:
-            resp = requests.request(
+            resp = self._session.request(
                 method, f"{self._api}{path}",
-                auth=self._auth, timeout=BETTERCAP_TIMEOUT, **kwargs
+                timeout=BETTERCAP_TIMEOUT, **kwargs
             )
             resp.raise_for_status()
             return resp.json()

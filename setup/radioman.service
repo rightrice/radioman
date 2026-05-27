@@ -23,5 +23,7 @@ CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 Environment=PYTHONUNBUFFERED=1
 Environment=RADIOMAN_CONFIG=/opt/radioman/radioman.conf
 
+LimitNOFILE=65536
+
 [Install]
 WantedBy=multi-user.target
