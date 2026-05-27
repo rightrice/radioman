@@ -37,6 +37,9 @@ class CaptureEngine:
         )
         self._iface       = config.get("interface", "wlan0")
         self._mon_iface   = config.get("monitor_interface", "mon0")
+        self._usb_iface   = config.get("usb_interface", "usb0")
+        self._usb_ip      = config.get("usb_ip", "10.55.0.1")
+        self._usb_nm_conn = config.get("usb_nm_connection", "usb-gadget")
         self._captures_dir = config.get("captures_dir", "/opt/radioman/captures")
         self._caplet      = config.get("caplet", "/opt/radioman/radioman.cap")
         self._session     = requests.Session()
@@ -104,16 +107,79 @@ class CaptureEngine:
                 log.debug("nmcli disconnect: %s", e)
 
     def _nm_reclaim(self):
-        """Hand the interface back to NetworkManager after scanning stops."""
+        """Bring wlan0 back to managed mode and reconnect to WiFi."""
+        # Ensure the link layer is up regardless of what bettercap left behind
+        subprocess.run(["ip", "link", "set", self._iface, "up"], capture_output=True)
+
         if shutil.which("nmcli"):
             try:
-                subprocess.run(
+                result = subprocess.run(
                     ["nmcli", "device", "connect", self._iface],
-                    capture_output=True, timeout=10,
+                    capture_output=True, text=True, timeout=15,
                 )
-                log.info("NetworkManager reclaimed %s", self._iface)
+                if result.returncode == 0:
+                    log.info("NetworkManager reconnected %s to WiFi", self._iface)
+                else:
+                    log.warning("nmcli connect %s failed: %s",
+                                self._iface, result.stderr.strip() or result.stdout.strip())
             except Exception as e:
-                log.debug("nmcli connect: %s", e)
+                log.warning("nmcli connect: %s", e)
+        elif shutil.which("wpa_cli"):
+            # Fallback for systems using wpa_supplicant directly (no NM)
+            try:
+                subprocess.run(
+                    ["wpa_cli", "-i", self._iface, "reassociate"],
+                    capture_output=True, timeout=5,
+                )
+                log.info("wpa_cli reassociate %s", self._iface)
+            except Exception as e:
+                log.debug("wpa_cli reassociate: %s", e)
+        else:
+            log.warning("No network manager found — %s link is up but WiFi may need manual reconnect", self._iface)
+
+        self._restore_usb()
+
+    def _restore_usb(self):
+        """Ensure the USB gadget interface keeps its static IP after scanning stops."""
+        try:
+            addr_out = subprocess.run(
+                ["ip", "addr", "show", self._usb_iface],
+                capture_output=True, text=True,
+            ).stdout
+        except Exception:
+            return  # usb0 doesn't exist — USB cable not connected
+
+        if self._usb_ip in addr_out:
+            log.debug("USB gadget %s IP intact (%s)", self._usb_iface, self._usb_ip)
+            return
+
+        log.warning("USB gadget %s lost IP %s — restoring...", self._usb_iface, self._usb_ip)
+
+        # Try NM connection profile first (created by install.sh)
+        if shutil.which("nmcli"):
+            try:
+                result = subprocess.run(
+                    ["nmcli", "connection", "up", self._usb_nm_conn],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    log.info("USB gadget connection '%s' reactivated", self._usb_nm_conn)
+                    return
+                log.debug("nmcli connection up %s: %s", self._usb_nm_conn,
+                          result.stderr.strip() or result.stdout.strip())
+            except Exception as e:
+                log.debug("nmcli usb restore: %s", e)
+
+        # Fallback: assign the IP directly
+        try:
+            subprocess.run(
+                ["ip", "addr", "add", f"{self._usb_ip}/24", "dev", self._usb_iface],
+                capture_output=True,
+            )
+            subprocess.run(["ip", "link", "set", self._usb_iface, "up"], capture_output=True)
+            log.info("USB gadget %s IP restored via ip addr add", self._usb_iface)
+        except Exception as e:
+            log.error("Could not restore USB gadget IP: %s", e)
 
     def _wait_for_api(self, timeout: int = 30) -> bool:
         """Poll until bettercap REST API responds or timeout expires."""
