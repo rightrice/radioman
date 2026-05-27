@@ -28,6 +28,7 @@ class CaptureEngine:
         self._scan_active = False   # user has started scanning
         self._lock        = threading.Lock()
         self._seen_caps   = set()
+        self._restart_backoff = 5   # seconds; doubles on each failed restart, caps at 300
 
         self._host  = config.get("bettercap_host", "127.0.0.1")
         self._port  = int(config.get("bettercap_port", 8081))
@@ -315,8 +316,15 @@ class CaptureEngine:
             # Restart bettercap if it crashed while scanning should be active
             if self._proc is None or self._proc.poll() is not None:
                 if shutil.which("bettercap"):
-                    log.warning("bettercap exited unexpectedly — restarting...")
+                    log.warning("bettercap exited unexpectedly — restarting in %ds...",
+                                self._restart_backoff)
+                    time.sleep(self._restart_backoff)
+                    self._restart_backoff = min(self._restart_backoff * 2, 300)
                     self._start_bettercap()
+                    if self._proc is None:
+                        # Setup failed (e.g. monitor interface error) — keep backing off
+                        continue
+                    self._restart_backoff = 5  # reset on success
                 else:
                     time.sleep(30)
                     continue
