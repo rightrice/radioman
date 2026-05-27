@@ -90,6 +90,36 @@ echo "options g_ether host_addr=72:48:4f:52:4d:01 dev_addr=72:48:4f:52:4d:02" | 
 sudo rmmod g_ether && sudo modprobe g_ether
 ```
 
+**Internet sharing (Pi needs internet for git pull, apt, etc.):**
+
+Run on your Mac each time you need the Pi to have internet access:
+
+```bash
+bash scripts/mac_connect.sh share
+```
+
+This enables NAT via pfctl so the Pi routes through your Mac's WiFi. **The rule does not survive Mac sleep or reboot** — re-run it whenever you lose Pi internet.
+
+One-time Pi-side setup (do this once after `install.sh`):
+
+```bash
+# Add default gateway and DNS to the usb-gadget NM profile
+sudo nmcli connection modify usb-gadget \
+  ipv4.gateway 10.55.0.2 \
+  ipv4.never-default no \
+  ipv4.dns "1.1.1.1 8.8.8.8"
+sudo nmcli connection up usb-gadget
+```
+
+After this the Pi knows to route through the Mac and resolve DNS — you only need to re-run `mac_connect.sh share` on the Mac side after each sleep/reboot.
+
+**Verify:**
+```bash
+# On Pi
+ping -c 2 1.1.1.1       # IP routing works
+ping -c 2 github.com    # DNS works
+```
+
 ### 5. Configure
 
 Edit `/opt/radioman/radioman.conf`:
