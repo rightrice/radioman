@@ -36,6 +36,7 @@ class CaptureEngine:
             config.get("bettercap_pass", "pass"),
         )
         self._iface       = config.get("interface", "wlan0")
+        self._mon_iface   = config.get("monitor_interface", "mon0")
         self._captures_dir = config.get("captures_dir", "/opt/radioman/captures")
         self._caplet      = config.get("caplet", "/opt/radioman/radioman.cap")
         self._session     = requests.Session()
@@ -56,6 +57,39 @@ class CaptureEngine:
         except Exception as e:
             log.debug("bettercap API %s %s: %s", method, path, e)
             return None
+
+    def _get_phy(self) -> str:
+        try:
+            r = subprocess.run(["iw", "dev", self._iface, "info"],
+                               capture_output=True, text=True)
+            for line in r.stdout.splitlines():
+                if "wiphy" in line:
+                    return f"phy{line.split()[-1]}"
+        except Exception:
+            pass
+        return "phy0"
+
+    def _setup_monitor(self):
+        # Remove stale interface from a previous run
+        subprocess.run(["iw", "dev", self._mon_iface, "del"],
+                       capture_output=True)
+        phy = self._get_phy()
+        subprocess.run(
+            ["iw", "phy", phy, "interface", "add", self._mon_iface, "type", "monitor"],
+            check=True,
+        )
+        subprocess.run(["ip", "link", "set", self._mon_iface, "up"], check=True)
+        log.info("Monitor interface %s created on %s", self._mon_iface, phy)
+
+    def _teardown_monitor(self):
+        try:
+            subprocess.run(["ip", "link", "set", self._mon_iface, "down"],
+                           capture_output=True)
+            subprocess.run(["iw", "dev", self._mon_iface, "del"],
+                           capture_output=True)
+            log.info("Monitor interface %s removed", self._mon_iface)
+        except Exception as e:
+            log.debug("teardown monitor: %s", e)
 
     def _nm_release(self):
         """Tell NetworkManager to stop managing the interface so bettercap can take over."""
@@ -98,9 +132,14 @@ class CaptureEngine:
             log.warning("bettercap not found — capture disabled. Install with: sudo apt install bettercap")
             return
         self._nm_release()
+        try:
+            self._setup_monitor()
+        except Exception as e:
+            log.error("Failed to create monitor interface %s: %s", self._mon_iface, e)
+            return
         cmd = [
             bc,
-            "-iface", self._iface,
+            "-iface", self._mon_iface,
             "-caplet", self._caplet,
             "-no-colors",
         ]
@@ -131,6 +170,7 @@ class CaptureEngine:
                 self._proc.kill()
                 self._proc.wait()
             self._proc = None
+        self._teardown_monitor()
         self._nm_reclaim()
 
     def _poll(self):
@@ -190,7 +230,7 @@ class CaptureEngine:
         if self._scan_active:
             return
         self._scan_active = True
-        log.info("Scan started — launching bettercap on %s", self._iface)
+        log.info("Scan started — launching bettercap on %s (via %s)", self._mon_iface, self._iface)
         self._start_bettercap()
 
     def stop_scan(self):

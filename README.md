@@ -41,7 +41,7 @@ SSH in over WiFi:
 ssh pi@radioman.local
 ```
 
-> **Note:** bettercap puts `wlan0` into monitor mode during scanning — WiFi SSH drops.
+> **Note:** radioman creates a virtual monitor interface (`mon0`) alongside `wlan0` during scanning — `wlan0` is disconnected from WiFi while scanning is active.
 > Use the USB cable (10.55.0.1) as your primary management connection after setup.
 
 ### 3. Clone and install
@@ -117,7 +117,22 @@ rssi_history_hours = 24
 device_token =         # set after pairing in dashboard
 ```
 
-### 6. Install AI (optional)
+### 6. Monitor mode
+
+The Pi Zero 2W's BCM43430A1 chip supports VDEV monitor mode with its stock Cypress firmware — no nexmon patching required. radioman creates `mon0` automatically when scanning starts.
+
+If you previously installed nexmon (packages `brcmfmac-nexmon-dkms` or `firmware-nexmon`), clean up with:
+
+```bash
+sudo bash setup/install_monitor.sh
+sudo reboot
+```
+
+This removes nexmon packages, restores the original Cypress firmware, and verifies VDEV monitor mode works.
+
+---
+
+### 7. Install AI (optional)
 
 The AI assistant requires a pre-built `llama-cli` binary (cross-compile from a more powerful machine) and the Granite model download.
 
@@ -189,6 +204,7 @@ radioman/
 ├── setup/
 │   ├── install.sh              # Full install script
 │   ├── install_ai.sh           # AI model + binary installer
+│   ├── install_monitor.sh      # Clean up nexmon; verify VDEV monitor mode
 │   ├── update.sh               # Update deployed files
 │   ├── radioman.service        # systemd service
 │   └── radioman.cap            # bettercap caplet
