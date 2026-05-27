@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Radioman — A portable field wireless discovery kit for networking enthusiasts, security researchers, and anyone who wants to understand the wireless environment around them. Sold and supported by Aspect Managed IT &amp; Cybersecurity.">
+    <title>Radioman — Field Wireless Discovery Kit</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <nav class="nav" id="nav">
+        <div class="nav__inner">
+            <a href="#hero" class="nav__logo">
+                <span class="nav__logo-mark">RM</span>
+                <span class="nav__logo-text">RADIOMAN</span>
+            </a>
+            <ul class="nav__links" role="list">
+                <li><a href="#capabilities" class="nav__link">Capabilities</a></li>
+                <li><a href="#workflow" class="nav__link">How It Works</a></li>
+                <li><a href="#xplt" class="nav__link">XPLT</a></li>
+                <li><a href="#shop" class="nav__link">Shop</a></li>
+                <li><a href="#docs" class="nav__link">Docs</a></li>
+            </ul>
+            <div class="nav__actions">
+                <button class="theme-toggle" id="themeToggle" aria-label="Toggle light and dark mode">
+                    <svg class="theme-icon theme-icon--sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                    <svg class="theme-icon theme-icon--moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                </button>
+                <a href="#shop" class="btn btn--primary btn--sm">Get Radioman</a>
+                <button class="nav__hamburger" id="navHamburger" aria-label="Open navigation menu" aria-expanded="false">
+                    <span></span><span></span><span></span>
+                </button>
+            </div>
+        </div>
+        <div class="nav__mobile" id="navMobile" aria-hidden="true">
+            <ul class="nav__mobile-links" role="list">
+                <li><a href="#capabilities" class="nav__link">Capabilities</a></li>
+                <li><a href="#workflow" class="nav__link">How It Works</a></li>
+                <li><a href="#xplt" class="nav__link">XPLT Integration</a></li>
+                <li><a href="#shop" class="nav__link">Shop</a></li>
+                <li><a href="#docs" class="nav__link">Docs</a></li>
+            </ul>
+            <a href="#shop" class="btn btn--primary">Get Radioman</a>
+        </div>
+    </nav>
+
+    <main>
+
+        <!-- ─── HERO ─────────────────────────────────────────────────────── -->
+        <section id="hero" class="hero">
+            <div class="hero__bg-grid" aria-hidden="true"></div>
+            <div class="hero__grid">
+                <div class="hero__content reveal">
+                    <div class="hero__badge">
+                        <span class="hero__badge-dot" aria-hidden="true"></span>
+                        Field Wireless Discovery Kit
+                    </div>
+                    <h1 class="hero__headline">
+                        Know the signal<br>
+                        before you touch<br>
+                        the network.
+                    </h1>
+                    <p class="hero__subtext">
+                        Radioman is a portable field kit for anyone who wants to understand the wireless environment around them. Walk a space, see what's actually there, and capture what matters — with structured data instead of mental notes.
+                    </p>
+                    <div class="hero__ctas">
+                        <a href="#shop" class="btn btn--primary btn--lg">Shop Field Kit</a>
+                        <a href="#capabilities" class="btn btn--ghost btn--lg">Explore Capabilities</a>
+                        <a href="#xplt" class="btn btn--outline btn--lg">See XPLT Integration</a>
+                    </div>
+                    <div class="hero__meta">
+                        <span class="hero__meta-item">
+                            <span class="hero__meta-dot" aria-hidden="true">◈</span>
+                            Works locally — no cloud required
+                        </span>
+                        <span class="hero__meta-item">
+                            <span class="hero__meta-dot" aria-hidden="true">◈</span>
+                            Optional XPLT workspace sync
+                        </span>
+                    </div>
+                </div>
+
+                <div class="hero__device reveal reveal--delay">
+                    <div class="hero__device-panel">
+                        <div class="hero__device-bolt hero__device-bolt--tl" aria-hidden="true"></div>
+                        <div class="hero__device-bolt hero__device-bolt--tr" aria-hidden="true"></div>
+                        <div class="hero__device-bolt hero__device-bolt--bl" aria-hidden="true"></div>
+                        <div class="hero__device-bolt hero__device-bolt--br" aria-hidden="true"></div>
+                        <div class="hero__device-header">
+                            <div class="hero__device-title-row">
+                                <span class="status-dot status-dot--standby" aria-label="Standby"></span>
+                                <span class="hero__device-name">RADIOMAN FIELD KIT</span>
+                            </div>
+                            <span class="hero__device-ver">v2.1</span>
+                        </div>
+                        <div class="hero__device-body">
+                            <div class="device-row">
+                                <span class="device-label">SESSION</span>
+                                <span class="device-value device-value--standby">STANDBY</span>
+                            </div>
+                            <div class="device-sep" aria-hidden="true"></div>
+                            <div class="device-row">
+                                <span class="device-label">NETWORKS VISIBLE</span>
+                                <span class="device-value device-value--dim">——</span>
+                            </div>
+                            <div class="device-row">
+                                <span class="device-label">SIGNAL RANGE</span>
+                                <div class="device-bars" aria-label="No signal">
+                                    <span class="bar bar--off"></span>
+                                    <span class="bar bar--off"></span>
+                                    <span class="bar bar--off"></span>
+                                    <span class="bar bar--off"></span>
+                                    <span class="bar bar--off"></span>
+                                </div>
+                            </div>
+                            <div class="device-row">
+                                <span class="device-label">FIELD NOTES</span>
+                                <span class="device-value device-value--dim">0</span>
+                            </div>
+                            <div class="device-row">
+                                <span class="device-label">OBSERVATIONS</span>
+                                <span class="device-value device-value--dim">——</span>
+                            </div>
+                            <div class="device-sep" aria-hidden="true"></div>
+                            <div class="device-row">
+                                <span class="device-label">XPLT SYNC</span>
+                                <span class="device-value device-value--dim">NOT CONNECTED</span>
+                            </div>
+                            <div class="device-row">
+                                <span class="device-label">LAST SESSION</span>
+                                <span class="device-value device-value--dim">——</span>
+                            </div>
+                        </div>
+                        <div class="hero__device-footer">
+                            <span class="hero__device-footer-text">Aspect Managed IT &amp; Cybersecurity</span>
+                        </div>
+                    </div>
+                    <div class="hero__device-ambient" aria-hidden="true"></div>
+                </div>
+            </div>
+            <div class="hero__scroll-hint" aria-hidden="true">
+                <span>Scroll to explore</span>
+                <span class="hero__scroll-arrow">↓</span>
+            </div>
+        </section>
+
+        <!-- ─── PROBLEM ────────────────────────────────────────────────────── -->
+        <section id="problem" class="problem section">
+            <div class="container">
+                <div class="section__header reveal">
+                    <span class="section__eyebrow">The Problem</span>
+                    <h2 class="section__title">The wireless world around you<br>is invisible until you look.</h2>
+                    <p class="section__lead">Most people move through wireless environments every day without a clear picture of what's actually there. Radioman changes that.</p>
+                </div>
+                <div class="problem__grid">
+                    <div class="problem__card reveal">
+                        <div class="problem__card-marker" aria-hidden="true"></div>
+                        <h3>Wireless is Invisible by Default</h3>
+                        <p>You can't see RF. Without the right tool in hand, you're guessing what networks, bands, and signals are actually present in any given space — home, office, venue, or anywhere in between.</p>
+                    </div>
+                    <div class="problem__card reveal">
+                        <div class="problem__card-marker" aria-hidden="true"></div>
+                        <h3>Observations Don't Survive the Moment</h3>
+                        <p>You notice something — a weak signal zone, an unexpected SSID, a channel collision — and then you walk away and it's gone. Mental notes are lossy by design.</p>
+                    </div>
+                    <div class="problem__card reveal">
+                        <div class="problem__card-marker" aria-hidden="true"></div>
+                        <h3>No Structure Means No Pattern</h3>
+                        <p>Without a consistent format for capturing what you find, you can't compare sessions, track changes over time, or build on what you already know. Curiosity deserves better than a notes app.</p>
+                    </div>
+                    <div class="problem__card reveal">
+                        <div class="problem__card-marker" aria-hidden="true"></div>
+                        <h3>Building from Memory is Lossy</h3>
+                        <p>Reconstructing what you observed after the fact means losing detail, sequence, and spatial context. The right time to capture data is while you're standing in it.</p>
+                    </div>
+                    <div class="problem__card reveal">
+                        <div class="problem__card-marker" aria-hidden="true"></div>
+                        <h3>Interference Hides in Plain Sight</h3>
+                        <p>Rogue devices, channel congestion, overlapping coverage, and unexpected SSIDs are everywhere. Without systematic discovery, they stay invisible — even to people who know to look.</p>
+                    </div>
+                    <div class="problem__card reveal">
+                        <div class="problem__card-marker" aria-hidden="true"></div>
+                        <h3>Every New Environment Starts from Zero</h3>
+                        <p>Walking into a new space — a home, a building, a hotel, a lab — with no visibility into the wireless environment means starting blind. Every time. Radioman fixes that.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── SYSTEM ─────────────────────────────────────────────────────── -->
+        <section id="system" class="system section">
+            <div class="container">
+                <div class="system__layout">
+                    <div class="system__content reveal">
+                        <span class="section__eyebrow">The System</span>
+                        <h2 class="section__title">One kit. Complete field visibility.</h2>
+                        <p>Radioman is a layered system — hardware, local software, and optional cloud sync — designed to slot into any workflow without getting in the way.</p>
+                        <p>It works completely without an internet connection. XPLT sync is available when you want to tie field results into structured records, projects, and longer-running documentation.</p>
+                        <a href="#shop" class="btn btn--primary">View the Field Kit</a>
+                    </div>
+                    <div class="system__layers reveal reveal--delay">
+                        <div class="system__layer system__layer--hw">
+                            <div class="system__layer-left">
+                                <span class="system__layer-icon" aria-hidden="true">▣</span>
+                            </div>
+                            <div class="system__layer-body">
+                                <h4>Radioman Field Kit</h4>
+                                <p>The physical device. Portable, purpose-built hardware for wireless discovery in the field.</p>
+                            </div>
+                            <span class="system__layer-tag">HARDWARE</span>
+                        </div>
+                        <div class="system__connector" aria-hidden="true"></div>
+                        <div class="system__layer">
+                            <div class="system__layer-left">
+                                <span class="system__layer-icon" aria-hidden="true">◫</span>
+                            </div>
+                            <div class="system__layer-body">
+                                <h4>Local Dashboard</h4>
+                                <p>A local web interface for managing sessions, reviewing discoveries, and capturing field notes in real time.</p>
+                            </div>
+                            <span class="system__layer-tag">LOCAL</span>
+                        </div>
+                        <div class="system__connector" aria-hidden="true"></div>
+                        <div class="system__layer">
+                            <div class="system__layer-left">
+                                <span class="system__layer-icon" aria-hidden="true">◎</span>
+                            </div>
+                            <div class="system__layer-body">
+                                <h4>Field Session Data</h4>
+                                <p>Structured session exports — wireless summaries, technician notes, timestamps, and observations — ready to use or share.</p>
+                            </div>
+                            <span class="system__layer-tag">EXPORT</span>
+                        </div>
+                        <div class="system__connector system__connector--optional" aria-hidden="true"></div>
+                        <div class="system__layer system__layer--optional">
+                            <div class="system__layer-left">
+                                <span class="system__layer-icon" aria-hidden="true">⬡</span>
+                            </div>
+                            <div class="system__layer-body">
+                                <h4>XPLT Workspace Sync</h4>
+                                <p>Optionally save selected results into your XPLT account, organized by location, project, survey, and notes.</p>
+                            </div>
+                            <span class="system__layer-tag system__layer-tag--opt">OPTIONAL</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── CAPABILITIES ──────────────────────────────────────────────── -->
+        <section id="capabilities" class="capabilities section">
+            <div class="container">
+                <div class="section__header reveal">
+                    <span class="section__eyebrow">Capabilities</span>
+                    <h2 class="section__title">Built for every step of the field session.</h2>
+                    <p class="section__lead">From wireless discovery to session documentation, Radioman covers what you need to actually understand a wireless environment — not just sense it.</p>
+                </div>
+                <div class="capabilities__interface reveal">
+                    <div class="tab-nav" role="tablist" aria-label="Capability areas">
+                        <button class="tab-nav__btn active" role="tab" data-tab="wireless" aria-selected="true" aria-controls="tab-wireless">Wireless Discovery</button>
+                        <button class="tab-nav__btn" role="tab" data-tab="notes" aria-selected="false" aria-controls="tab-notes">Field Notes</button>
+                        <button class="tab-nav__btn" role="tab" data-tab="dashboard" aria-selected="false" aria-controls="tab-dashboard">Local Dashboard</button>
+                        <button class="tab-nav__btn" role="tab" data-tab="documentation" aria-selected="false" aria-controls="tab-documentation">Site Documentation</button>
+                        <button class="tab-nav__btn" role="tab" data-tab="xplt-sync" aria-selected="false" aria-controls="tab-xplt-sync">XPLT Sync</button>
+                        <button class="tab-nav__btn" role="tab" data-tab="reports" aria-selected="false" aria-controls="tab-reports">Report Support</button>
+                    </div>
+                    <div class="tab-panels">
+
+                        <div class="tab-panel active" id="tab-wireless" role="tabpanel" aria-labelledby="">
+                            <div class="tab-panel__layout">
+                                <div class="tab-panel__content">
+                                    <h3>Wireless Discovery</h3>
+                                    <p>Radioman continuously scans the wireless environment as you move through a space, building a real-time picture of what's actually there. Networks are logged with signal strength, band, channel, and security type — a structured view instead of a mental map.</p>
+                                    <ul class="feature-list">
+                                        <li>Active network detection across 2.4 GHz, 5 GHz, and 6 GHz bands</li>
+                                        <li>Signal strength logging and coverage tracking by area</li>
+                                        <li>Security classification for each observed network</li>
+                                        <li>Rogue and unexpected SSID flagging</li>
+                                        <li>Persistent discovery log across the full walkthrough</li>
+                                    </ul>
+                                </div>
+                                <div class="tab-panel__visual">
+                                    <div class="mock-window">
+                                        <div class="mock-window__bar">
+                                            <span class="mock-dot" style="background:#ff5f57"></span>
+                                            <span class="mock-dot" style="background:#febc2e"></span>
+                                            <span class="mock-dot" style="background:#28c840"></span>
+                                            <span class="mock-window__title">Wireless Scan — Live</span>
+                                        </div>
+                                        <div class="mock-window__body">
+                                            <div class="mock-net-row">
+                                                <span class="mock-ssid">CORP-NET-5G</span>
+                                                <span class="mock-band">5 GHz</span>
+                                                <span class="mock-sig mock-sig--high">▊▊▊▊</span>
+                                            </div>
+                                            <div class="mock-net-row">
+                                                <span class="mock-ssid">CORP-NET-2.4</span>
+                                                <span class="mock-band">2.4 GHz</span>
+                                                <span class="mock-sig mock-sig--med">▊▊▊░</span>
+                                            </div>
+                                            <div class="mock-net-row">
+                                                <span class="mock-ssid">GUEST-WIFI</span>
+                                                <span class="mock-band">5 GHz</span>
+                                                <span class="mock-sig mock-sig--med">▊▊░░</span>
+                                            </div>
+                                            <div class="mock-net-row mock-net-row--flagged">
+                                                <span class="mock-ssid">⚑ UNKNOWN-3D4F</span>
+                                                <span class="mock-band">2.4 GHz</span>
+                                                <span class="mock-sig mock-sig--low">▊░░░</span>
+                                            </div>
+                                            <div class="mock-net-row">
+                                                <span class="mock-ssid">PRINT-SERVER</span>
+                                                <span class="mock-band">2.4 GHz</span>
+                                                <span class="mock-sig mock-sig--low">▊░░░</span>
+                                            </div>
+                                            <div class="mock-statusbar">
+                                                <span>12 networks visible</span>
+                                                <span class="mock-scanning">SCANNING <span class="scan-pulse">●</span></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="tab-panel" id="tab-notes" role="tabpanel">
+                            <div class="tab-panel__layout">
+                                <div class="tab-panel__content">
+                                    <h3>Field Notes</h3>
+                                    <p>Capture observations in the field without breaking your flow. Notes are timestamped, tied to session context, and stored in a structured format — so what you noticed while you were standing there actually stays with you.</p>
+                                    <ul class="feature-list">
+                                        <li>Quick-entry notes tied to the active session</li>
+                                        <li>Timestamped entries with wireless context at entry time</li>
+                                        <li>Predefined categories for consistent documentation</li>
+                                        <li>Free-text notes for site-specific observations</li>
+                                        <li>Notes export cleanly alongside session data</li>
+                                    </ul>
+                                </div>
+                                <div class="tab-panel__visual">
+                                    <div class="mock-window">
+                                        <div class="mock-window__bar">
+                                            <span class="mock-dot" style="background:#ff5f57"></span>
+                                            <span class="mock-dot" style="background:#febc2e"></span>
+                                            <span class="mock-dot" style="background:#28c840"></span>
+                                            <span class="mock-window__title">Field Notes — Session Active</span>
+                                        </div>
+                                        <div class="mock-window__body mock-window__body--notes">
+                                            <div class="mock-note">
+                                                <span class="mock-note__time">09:14</span>
+                                                <span class="mock-note__tag tag--obs">OBS</span>
+                                                <span class="mock-note__text">Dead zone near server room entrance. No AP coverage visible.</span>
+                                            </div>
+                                            <div class="mock-note">
+                                                <span class="mock-note__time">09:22</span>
+                                                <span class="mock-note__tag tag--flag">FLAG</span>
+                                                <span class="mock-note__text">Unmanaged AP on wall in break room — not in client inventory.</span>
+                                            </div>
+                                            <div class="mock-note">
+                                                <span class="mock-note__time">09:31</span>
+                                                <span class="mock-note__tag tag--rec">REC</span>
+                                                <span class="mock-note__text">Conference room B needs AP. Signal drops below threshold 3m from door.</span>
+                                            </div>
+                                            <div class="mock-note-input">
+                                                <span class="mock-cursor">Add note...</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="tab-panel" id="tab-dashboard" role="tabpanel">
+                            <div class="tab-panel__layout">
+                                <div class="tab-panel__content">
+                                    <h3>Local Dashboard</h3>
+                                    <p>Radioman runs a local web interface accessible from any device on the same network. No cloud account required. The dashboard provides a real-time view of the active field session, session history, and export controls.</p>
+                                    <ul class="feature-list">
+                                        <li>Local-first web interface — works entirely offline</li>
+                                        <li>Real-time session view with live wireless data</li>
+                                        <li>Session history and export controls</li>
+                                        <li>Technician note management and review</li>
+                                        <li>XPLT sync controls when integration is configured</li>
+                                    </ul>
+                                </div>
+                                <div class="tab-panel__visual">
+                                    <div class="mock-dashboard">
+                                        <div class="mock-dashboard__bar">
+                                            <span class="mock-dashboard__logo">RADIOMAN</span>
+                                            <span class="mock-dashboard__session">Acme Corp — Bldg A</span>
+                                        </div>
+                                        <div class="mock-dashboard__stats">
+                                            <div class="mock-stat">
+                                                <span class="mock-stat__val">14</span>
+                                                <span class="mock-stat__lbl">Networks</span>
+                                            </div>
+                                            <div class="mock-stat">
+                                                <span class="mock-stat__val">7</span>
+                                                <span class="mock-stat__lbl">Notes</span>
+                                            </div>
+                                            <div class="mock-stat mock-stat--warn">
+                                                <span class="mock-stat__val">2</span>
+                                                <span class="mock-stat__lbl">Flags</span>
+                                            </div>
+                                            <div class="mock-stat">
+                                                <span class="mock-stat__val">34m</span>
+                                                <span class="mock-stat__lbl">Duration</span>
+                                            </div>
+                                        </div>
+                                        <div class="mock-dashboard__body">
+                                            <div class="mock-row-item">
+                                                <span class="mock-row-item__label">Session</span>
+                                                <span class="mock-row-item__val mock-row-item__val--active">ACTIVE</span>
+                                            </div>
+                                            <div class="mock-row-item">
+                                                <span class="mock-row-item__label">Local IP</span>
+                                                <span class="mock-row-item__val">192.168.1.42</span>
+                                            </div>
+                                            <div class="mock-row-item">
+                                                <span class="mock-row-item__label">XPLT Sync</span>
+                                                <span class="mock-row-item__val mock-row-item__val--dim">Not configured</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="tab-panel" id="tab-documentation" role="tabpanel">
+                            <div class="tab-panel__layout">
+                                <div class="tab-panel__content">
+                                    <h3>Site Documentation</h3>
+                                    <p>Every Radioman session produces structured documentation: wireless conditions, technician notes, coverage observations, and site context — all timestamped and ready to act on. Export or sync when ready.</p>
+                                    <ul class="feature-list">
+                                        <li>Complete session summaries with all discovered networks</li>
+                                        <li>Technician notes organized by time and category</li>
+                                        <li>Signal coverage observations by area or zone</li>
+                                        <li>Structured export formats for report use</li>
+                                        <li>Session context stored per run — location, date, operator</li>
+                                    </ul>
+                                </div>
+                                <div class="tab-panel__visual">
+                                    <div class="mock-doc">
+                                        <div class="mock-doc__title">Field Session — Acme Corp</div>
+                                        <div class="mock-doc__meta">
+                                            <div class="mock-doc__meta-row"><span class="mock-doc__meta-k">Site</span><span>Main Office, Bldg A</span></div>
+                                            <div class="mock-doc__meta-row"><span class="mock-doc__meta-k">Date</span><span>2025-06-12</span></div>
+                                            <div class="mock-doc__meta-row"><span class="mock-doc__meta-k">Tech</span><span>J. Rivera</span></div>
+                                        </div>
+                                        <div class="mock-doc__sep"></div>
+                                        <div class="mock-doc__section">
+                                            <div class="mock-doc__sh">WIRELESS SUMMARY</div>
+                                            <div class="mock-doc__line">14 networks observed · 2 flagged for review</div>
+                                        </div>
+                                        <div class="mock-doc__section">
+                                            <div class="mock-doc__sh">OBSERVATIONS</div>
+                                            <div class="mock-doc__line">⚑ Dead zone — Server room entrance</div>
+                                            <div class="mock-doc__line">⚑ Unmanaged AP — Break room</div>
+                                            <div class="mock-doc__line">! Coverage gap — Conference room B</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="tab-panel" id="tab-xplt-sync" role="tabpanel">
+                            <div class="tab-panel__layout">
+                                <div class="tab-panel__content">
+                                    <h3>XPLT Sync</h3>
+                                    <p>When you're ready to move field results into your reporting layer, Radioman can sync selected session data into your XPLT account. Sync is controlled and intentional — nothing is uploaded automatically.</p>
+                                    <ul class="feature-list">
+                                        <li>Save selected results to your XPLT workspace</li>
+                                        <li>Tie results to clients, sites, surveys, and reports</li>
+                                        <li>Sync wireless summaries, notes, and observations</li>
+                                        <li>Select exactly what gets saved — no automatic uploads</li>
+                                        <li>XPLT stores structured records for reporting and follow-up</li>
+                                    </ul>
+                                </div>
+                                <div class="tab-panel__visual">
+                                    <div class="mock-sync">
+                                        <div class="mock-sync__title">Sync to XPLT</div>
+                                        <div class="mock-sync__items">
+                                            <div class="mock-sync__item">
+                                                <span class="mock-sync__chk mock-sync__chk--on">✓</span>
+                                                <span>Wireless discovery summary</span>
+                                            </div>
+                                            <div class="mock-sync__item">
+                                                <span class="mock-sync__chk mock-sync__chk--on">✓</span>
+                                                <span>Flagged networks (2)</span>
+                                            </div>
+                                            <div class="mock-sync__item">
+                                                <span class="mock-sync__chk mock-sync__chk--on">✓</span>
+                                                <span>Technician notes (7)</span>
+                                            </div>
+                                            <div class="mock-sync__item">
+                                                <span class="mock-sync__chk mock-sync__chk--off">○</span>
+                                                <span>Raw scan data</span>
+                                            </div>
+                                        </div>
+                                        <div class="mock-sync__dest">
+                                            <span class="mock-sync__dest-arrow">→</span>
+                                            <div>
+                                                <span class="mock-sync__dest-label">XPLT</span>
+                                                <span class="mock-sync__dest-path">Acme Corp / Main Office / Survey 001</span>
+                                            </div>
+                                        </div>
+                                        <button class="mock-sync__btn" tabindex="-1">Sync Selected</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="tab-panel" id="tab-reports" role="tabpanel">
+                            <div class="tab-panel__layout">
+                                <div class="tab-panel__content">
+                                    <h3>Report Support</h3>
+                                    <p>Radioman sessions produce the raw material for client reports. Structured observations, timestamped notes, wireless summaries, and flagged findings are organized and ready — so reports start from data, not memory.</p>
+                                    <ul class="feature-list">
+                                        <li>Organized, exportable session data for report preparation</li>
+                                        <li>Flagged findings ready for client deliverables</li>
+                                        <li>Observations linked to specific areas or zones</li>
+                                        <li>Notes categorized as observations, flags, or recommendations</li>
+                                        <li>XPLT-synced sessions feed directly into XPLT reports</li>
+                                    </ul>
+                                </div>
+                                <div class="tab-panel__visual">
+                                    <div class="mock-report">
+                                        <div class="mock-report__title">Wireless Assessment — Acme Corp</div>
+                                        <div class="mock-report__section">
+                                            <div class="mock-report__sh">Executive Summary</div>
+                                            <div class="mock-report__line" style="width:90%"></div>
+                                            <div class="mock-report__line" style="width:72%"></div>
+                                        </div>
+                                        <div class="mock-report__section">
+                                            <div class="mock-report__sh">Findings</div>
+                                            <div class="mock-report__finding">
+                                                <span class="mock-finding-icon mock-finding-icon--flag">⚑</span>
+                                                <span>Unmanaged access point detected in break room</span>
+                                            </div>
+                                            <div class="mock-report__finding">
+                                                <span class="mock-finding-icon mock-finding-icon--warn">!</span>
+                                                <span>Coverage gap identified in Conference Room B</span>
+                                            </div>
+                                        </div>
+                                        <div class="mock-report__section">
+                                            <div class="mock-report__sh">Recommendations</div>
+                                            <div class="mock-report__line" style="width:85%"></div>
+                                            <div class="mock-report__line" style="width:60%"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── WORKFLOW ──────────────────────────────────────────────────── -->
+        <section id="workflow" class="workflow section">
+            <div class="container">
+                <div class="section__header reveal">
+                    <span class="section__eyebrow">Field Workflow</span>
+                    <h2 class="section__title">From first walkthrough<br>to structured field data.</h2>
+                    <p class="section__lead">Radioman fits into any site visit without adding friction. A complete session takes less time than reconstructing notes afterward — and produces something you can actually use.</p>
+                </div>
+                <div class="workflow__steps">
+                    <div class="workflow__step reveal">
+                        <div class="workflow__step-num" aria-hidden="true">01</div>
+                        <div class="workflow__step-body">
+                            <h3>Start a Session</h3>
+                            <p>Name the session and optionally tag it with a location or project. Radioman logs all activity against this session from the moment you start.</p>
+                        </div>
+                    </div>
+                    <div class="workflow__connector" aria-hidden="true"></div>
+                    <div class="workflow__step reveal">
+                        <div class="workflow__step-num" aria-hidden="true">02</div>
+                        <div class="workflow__step-body">
+                            <h3>Walk the Site</h3>
+                            <p>Move through the building with Radioman active. Wireless networks are discovered and logged in real time as you move through different areas and floors.</p>
+                        </div>
+                    </div>
+                    <div class="workflow__connector" aria-hidden="true"></div>
+                    <div class="workflow__step reveal">
+                        <div class="workflow__step-num" aria-hidden="true">03</div>
+                        <div class="workflow__step-body">
+                            <h3>Capture Observations</h3>
+                            <p>Add field notes as you go — dead zones, unexpected devices, coverage gaps, access point conditions. Notes are timestamped with the wireless context from that moment.</p>
+                        </div>
+                    </div>
+                    <div class="workflow__connector" aria-hidden="true"></div>
+                    <div class="workflow__step reveal">
+                        <div class="workflow__step-num" aria-hidden="true">04</div>
+                        <div class="workflow__step-body">
+                            <h3>Review the Session</h3>
+                            <p>When the walkthrough is complete, review the session on the local dashboard. See everything that was observed, flagged, and noted during the visit.</p>
+                        </div>
+                    </div>
+                    <div class="workflow__connector" aria-hidden="true"></div>
+                    <div class="workflow__step reveal">
+                        <div class="workflow__step-num" aria-hidden="true">05</div>
+                        <div class="workflow__step-body">
+                            <h3>Export or Sync</h3>
+                            <p>Export the session locally in a structured format, or optionally sync selected results into your XPLT workspace to build records across locations, projects, and time.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── XPLT INTEGRATION ──────────────────────────────────────────── -->
+        <section id="xplt" class="xplt section">
+            <div class="container">
+                <div class="xplt__layout">
+                    <div class="xplt__content reveal">
+                        <span class="section__eyebrow">XPLT Integration</span>
+                        <h2 class="section__title">Radioman collects.<br>XPLT organizes.</h2>
+                        <p>Radioman is designed to work without an account or internet connection. When you want to organize field results across multiple sessions, locations, or projects, XPLT is the optional sync destination.</p>
+                        <p>Selected session data can be saved into your XPLT workspace and organized by location, project, and survey. XPLT stores the structured records you need to track changes over time, compare environments, and build a personal wireless knowledge base.</p>
+                        <blockquote class="xplt__quote">
+                            "Radioman captures what's in the air. XPLT turns selected sessions into structured records you can actually use."
+                        </blockquote>
+                        <p class="xplt__note">Sync is always controlled — you decide what gets saved and when.</p>
+                        <a href="#" class="btn btn--outline">Learn about XPLT →</a>
+                    </div>
+                    <div class="xplt__model reveal reveal--delay">
+                        <div class="xplt__model-header">
+                            <span class="xplt__model-eyebrow">XPLT Data Model</span>
+                        </div>
+                        <div class="xplt__tree">
+                            <div class="xplt__node xplt__node--d1">
+                                <span class="xplt__node-marker" aria-hidden="true">◈</span>
+                                <div class="xplt__node-body">
+                                    <span class="xplt__node-type">LOCATION</span>
+                                    <span class="xplt__node-eg">Home Lab — Floor 2</span>
+                                </div>
+                            </div>
+                            <div class="xplt__branch" aria-hidden="true"></div>
+                            <div class="xplt__node xplt__node--d2">
+                                <span class="xplt__node-marker" aria-hidden="true">◈</span>
+                                <div class="xplt__node-body">
+                                    <span class="xplt__node-type">SITE</span>
+                                    <span class="xplt__node-eg">East Wing / Server Corner</span>
+                                </div>
+                            </div>
+                            <div class="xplt__branch" aria-hidden="true"></div>
+                            <div class="xplt__node xplt__node--d3">
+                                <span class="xplt__node-marker" aria-hidden="true">◈</span>
+                                <div class="xplt__node-body">
+                                    <span class="xplt__node-type">SURVEY</span>
+                                    <span class="xplt__node-eg">Baseline Wireless Survey</span>
+                                </div>
+                            </div>
+                            <div class="xplt__branch" aria-hidden="true"></div>
+                            <div class="xplt__node xplt__node--d4">
+                                <span class="xplt__node-marker" aria-hidden="true">◈</span>
+                                <div class="xplt__node-body">
+                                    <span class="xplt__node-type">OBSERVATION</span>
+                                    <span class="xplt__node-eg">Dead zone, hallway near closet</span>
+                                </div>
+                            </div>
+                            <div class="xplt__branch" aria-hidden="true"></div>
+                            <div class="xplt__node xplt__node--d5">
+                                <span class="xplt__node-marker" aria-hidden="true">◈</span>
+                                <div class="xplt__node-body">
+                                    <span class="xplt__node-type">REPORT</span>
+                                    <span class="xplt__node-eg">Wireless Summary — Q3 2025</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="xplt__stores">
+                            <div class="xplt__stores-label">XPLT stores from Radioman sessions:</div>
+                            <ul class="xplt__stores-list">
+                                <li>Wireless discovery summaries</li>
+                                <li>Field notes, flags, and observations</li>
+                                <li>Session timestamps and location context</li>
+                                <li>Coverage and signal data over time</li>
+                                <li>Notes and follow-up items per location</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── USE CASES ─────────────────────────────────────────────────── -->
+        <section id="use-cases" class="use-cases section">
+            <div class="container">
+                <div class="section__header reveal">
+                    <span class="section__eyebrow">Use Cases</span>
+                    <h2 class="section__title">For anyone who wants to understand<br>the signal around them.</h2>
+                </div>
+                <div class="use-cases__grid">
+                    <div class="uc-card reveal">
+                        <span class="uc-card__num" aria-hidden="true">01</span>
+                        <h3>Home Network Mapping</h3>
+                        <p>Walk your home and build a real picture of your wireless environment — dead zones, channel congestion, signal overlap, and everything your router's admin panel never tells you.</p>
+                    </div>
+                    <div class="uc-card reveal">
+                        <span class="uc-card__num" aria-hidden="true">02</span>
+                        <h3>Home Lab Documentation</h3>
+                        <p>Document the wireless footprint of your lab as it grows. Track what's running, where signals reach, and how your setup changes over time with structured session data.</p>
+                    </div>
+                    <div class="uc-card reveal">
+                        <span class="uc-card__num" aria-hidden="true">03</span>
+                        <h3>Wireless Site Surveys</h3>
+                        <p>Walk any space and build a signal coverage picture from actual observation. Great for pre-deployment planning, validating AP placement, or understanding an environment you didn't set up.</p>
+                    </div>
+                    <div class="uc-card reveal">
+                        <span class="uc-card__num" aria-hidden="true">04</span>
+                        <h3>Security Research &amp; Assessment</h3>
+                        <p>Conduct structured wireless discovery during authorized assessments. Capture what's visible, what's unexpected, and what warrants a closer look — without relying on memory or informal notes.</p>
+                    </div>
+                    <div class="uc-card reveal">
+                        <span class="uc-card__num" aria-hidden="true">05</span>
+                        <h3>Interference Hunting</h3>
+                        <p>Track down the source of slow speeds, dropped connections, or unexplained signal problems. Systematic wireless visibility makes interference problems findable instead of just frustrating.</p>
+                    </div>
+                    <div class="uc-card reveal">
+                        <span class="uc-card__num" aria-hidden="true">06</span>
+                        <h3>Event &amp; Venue Awareness</h3>
+                        <p>Walk a conference, venue, hotel, or public space and see what's broadcasting. Understand the wireless density before you connect — or just because you're curious what's out there.</p>
+                    </div>
+                    <div class="uc-card reveal">
+                        <span class="uc-card__num" aria-hidden="true">07</span>
+                        <h3>Network Documentation</h3>
+                        <p>Build a baseline wireless record for any environment you own or manage. A single Radioman session produces more structured data than hours of manual notes or scattered screenshots.</p>
+                    </div>
+                    <div class="uc-card reveal">
+                        <span class="uc-card__num" aria-hidden="true">08</span>
+                        <h3>Personal Knowledge Projects</h3>
+                        <p>Build a record of the wireless environments you care about over time. Compare sessions, track changes, and sync selected data to XPLT to keep a living wireless knowledge base.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── SHOP ──────────────────────────────────────────────────────── -->
+        <section id="shop" class="shop section">
+            <div class="container">
+                <div class="section__header reveal">
+                    <span class="section__eyebrow">Field Kit</span>
+                    <h2 class="section__title">The complete field wireless<br>discovery kit.</h2>
+                    <p class="section__lead">Everything you need to run structured wireless field sessions from day one.</p>
+                </div>
+                <div class="shop__layout">
+                    <div class="shop__image reveal">
+                        <div class="shop__image-frame">
+                            <div class="shop__bolt shop__bolt--tl" aria-hidden="true"></div>
+                            <div class="shop__bolt shop__bolt--tr" aria-hidden="true"></div>
+                            <div class="shop__bolt shop__bolt--bl" aria-hidden="true"></div>
+                            <div class="shop__bolt shop__bolt--br" aria-hidden="true"></div>
+                            <div class="shop__device-mock">
+                                <div class="shop__device-eink">
+                                    <span class="shop__device-eink-brand">RADIOMAN</span>
+                                    <span class="shop__device-eink-model">FIELD KIT</span>
+                                    <div class="shop__device-eink-line"></div>
+                                    <span class="shop__device-eink-status">READY</span>
+                                </div>
+                            </div>
+                            <span class="shop__image-caption">Product photography coming soon</span>
+                        </div>
+                    </div>
+                    <div class="shop__details reveal reveal--delay">
+                        <div class="shop__product-name-row">
+                            <h3>Radioman Field Kit</h3>
+                        </div>
+                        <div class="shop__price-row">
+                            <span class="shop__price">$249</span>
+                            <span class="shop__price-note">Placeholder pricing · Subject to change</span>
+                        </div>
+                        <div class="shop__includes">
+                            <h4>What's Included</h4>
+                            <ul class="shop__list">
+                                <li><span class="shop__check" aria-hidden="true">✓</span>Radioman field device — field-ready hardware</li>
+                                <li><span class="shop__check" aria-hidden="true">✓</span>Raw titanium case with black hex bolt accents</li>
+                                <li><span class="shop__check" aria-hidden="true">✓</span>E-ink status display</li>
+                                <li><span class="shop__check" aria-hidden="true">✓</span>Preloaded Radioman field software</li>
+                                <li><span class="shop__check" aria-hidden="true">✓</span>Local dashboard access</li>
+                                <li><span class="shop__check" aria-hidden="true">✓</span>XPLT sync support (optional account required)</li>
+                                <li><span class="shop__check" aria-hidden="true">✓</span>Getting started guide</li>
+                                <li><span class="shop__check" aria-hidden="true">✓</span>Field workflow documentation</li>
+                            </ul>
+                        </div>
+                        <div class="shop__cta">
+                            <button class="btn btn--primary btn--lg shop__buy-btn" disabled aria-disabled="true">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                Purchase with Stripe
+                                <span class="shop__buy-soon">Coming Soon</span>
+                            </button>
+                            <p class="shop__sold-by">Sold and supported by <strong>Aspect Managed IT &amp; Cybersecurity</strong></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── DOCS ──────────────────────────────────────────────────────── -->
+        <section id="docs" class="docs section">
+            <div class="container">
+                <div class="section__header reveal">
+                    <span class="section__eyebrow">Documentation</span>
+                    <h2 class="section__title">Supported from day one.</h2>
+                    <p class="section__lead">Complete documentation to get you in the field quickly and keep you running.</p>
+                </div>
+                <div class="docs__grid">
+                    <a href="#" class="doc-card reveal">
+                        <div class="doc-card__icon" aria-hidden="true">▶</div>
+                        <h3>Getting Started</h3>
+                        <p>Hardware setup, initial configuration, and your first field session — from unboxing to first walkthrough.</p>
+                        <span class="doc-card__link" aria-hidden="true">View Guide →</span>
+                    </a>
+                    <a href="#" class="doc-card reveal">
+                        <div class="doc-card__icon" aria-hidden="true">☑</div>
+                        <h3>Field Session Checklist</h3>
+                        <p>Step-by-step workflow checklist for wireless site surveys, home network mapping, and any structured field walkthrough.</p>
+                        <span class="doc-card__link" aria-hidden="true">View Checklist →</span>
+                    </a>
+                    <a href="#" class="doc-card reveal">
+                        <div class="doc-card__icon" aria-hidden="true">◫</div>
+                        <h3>Local Dashboard</h3>
+                        <p>Full reference for the local dashboard — session management, discovery views, export controls, and settings.</p>
+                        <span class="doc-card__link" aria-hidden="true">View Docs →</span>
+                    </a>
+                    <a href="#" class="doc-card reveal">
+                        <div class="doc-card__icon" aria-hidden="true">⬡</div>
+                        <h3>XPLT Sync</h3>
+                        <p>How to configure XPLT sync, manage session exports, and organize Radioman data in your XPLT workspace.</p>
+                        <span class="doc-card__link" aria-hidden="true">View Docs →</span>
+                    </a>
+                    <a href="#" class="doc-card reveal">
+                        <div class="doc-card__icon" aria-hidden="true">↑</div>
+                        <h3>Updates &amp; Support</h3>
+                        <p>Release notes, firmware updates, and how to get support from the Aspect team.</p>
+                        <span class="doc-card__link" aria-hidden="true">View Docs →</span>
+                    </a>
+                    <a href="#" class="doc-card reveal">
+                        <div class="doc-card__icon" aria-hidden="true">⊕</div>
+                        <h3>Troubleshooting</h3>
+                        <p>Common issues, diagnostic steps, and how to reset and recover the device in the field.</p>
+                        <span class="doc-card__link" aria-hidden="true">View Docs →</span>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── RESPONSIBLE USE ───────────────────────────────────────────── -->
+        <section id="responsible-use" class="responsible section">
+            <div class="container">
+                <div class="responsible__inner reveal">
+                    <span class="section__eyebrow">Responsible Use</span>
+                    <h2>Intended for authorized network environments.</h2>
+                    <p>Radioman is designed for use on networks the operator owns, manages, or has explicit permission to assess — home networks, personal lab environments, authorized site assessments, and permitted wireless reviews.</p>
+                    <p>Use Radioman in compliance with applicable laws and any location or engagement-specific authorization requirements. Aspect supports responsible use of all Radioman capabilities.</p>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ─── FOOTER ────────────────────────────────────────────────────────── -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer__layout">
+                <div class="footer__brand">
+                    <div class="footer__logo">
+                        <span class="footer__logo-mark">RM</span>
+                        <span class="footer__logo-text">RADIOMAN</span>
+                    </div>
+                    <p class="footer__tagline">Portable wireless discovery for people who want to understand the signal.</p>
+                    <p class="footer__aspect">Sold and supported by<br><strong>Aspect Managed IT &amp; Cybersecurity</strong></p>
+                </div>
+                <div class="footer__col">
+                    <h4>Product</h4>
+                    <ul role="list">
+                        <li><a href="#capabilities">Capabilities</a></li>
+                        <li><a href="#workflow">How It Works</a></li>
+                        <li><a href="#xplt">XPLT Integration</a></li>
+                        <li><a href="#shop">Shop</a></li>
+                    </ul>
+                </div>
+                <div class="footer__col">
+                    <h4>Documentation</h4>
+                    <ul role="list">
+                        <li><a href="#docs">Getting Started</a></li>
+                        <li><a href="#docs">Field Workflow</a></li>
+                        <li><a href="#docs">Local Dashboard</a></li>
+                        <li><a href="#docs">XPLT Sync</a></li>
+                    </ul>
+                </div>
+                <div class="footer__col">
+                    <h4>Support</h4>
+                    <ul role="list">
+                        <li><a href="#">Contact Support</a></li>
+                        <li><a href="#">Updates</a></li>
+                        <li><a href="#">Privacy Policy</a></li>
+                        <li><a href="#">Terms of Use</a></li>
+                        <li><a href="#responsible-use">Responsible Use</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer__bottom">
+                <span>© 2026 Aspect Managed IT &amp; Cybersecurity. All rights reserved.</span>
+                <span>Radioman is a product of Aspect IT, LLC.</span>
+            </div>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
