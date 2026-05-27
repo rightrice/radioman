@@ -93,7 +93,7 @@ async function fetchViewData() {
     case "ignore":    return get("/api/ignore");
     case "stats":     return Promise.all([get("/api/networks"), get("/api/stats")]);
     case "ai":        return get("/api/ai/status");
-    case "overview":  return Promise.all([get("/api/networks"), get("/api/events?limit=10")]);
+    case "overview":  return Promise.all([get("/api/networks"), get("/api/events?limit=3")]);
     default:          return null;
   }
 }
@@ -159,33 +159,30 @@ function viewOverview(status, xplt, recentNets = [], recentEvents = []) {
   const hearts = makeHearts(pct);
 
   return `
-    <div class="rm-overview-grid">
-      <div class="rm-status-card">
+    <div class="rm-tile-row">
+      <div class="dash-kpi-card rm-scan-tile">
+        <div class="dash-kpi-label">Status</div>
         <div class="rm-scan-indicator ${scanning ? "rm-scan-indicator--on" : "rm-scan-indicator--off"}">
           <div class="rm-scan-indicator-dot"></div>
-          <span class="rm-mono">${scanning ? "SCANNING" : "IDLE"}</span>
+          <span class="rm-mono">${scanning ? "Scanning" : "Idle"}</span>
         </div>
-        <div class="rm-status-msg">${esc(p.message || "standing by")}</div>
-        <div class="rm-battery">
+        <div class="dash-kpi-sub rm-status-msg">${esc(p.message || "standing by")}</div>
+        <div class="rm-battery rm-battery-sm">
           <span class="rm-hearts">${hearts}</span>
-          <span class="rm-mono">${pct >= 0 ? pct + "%" : "—"}</span>
+          <span class="rm-mono rm-muted">${pct >= 0 ? pct + "%" : "—"}</span>
           ${chrg}
         </div>
-        <div style="margin-top:auto; padding-top:1rem">
-          <button id="rmScanToggleBtn"
-            class="rm-btn ${scanning ? "rm-btn-danger" : "rm-btn-primary"}"
-            style="width:100%">
-            ${scanning ? "⏹ Stop Scanning" : "▶ Start Scanning"}
-          </button>
-        </div>
+        <button id="rmScanToggleBtn"
+          class="rm-btn ${scanning ? "rm-btn-danger" : "rm-btn-primary"} rm-scan-btn"
+          style="width:100%; margin-top:auto">
+          ${scanning ? "⏹ Stop" : "▶ Start Scanning"}
+        </button>
       </div>
-      <div class="rm-kpi-row">
-        ${kpi("Networks", s.networks ?? 0, "teal")}
-        ${kpi("Clients", s.clients ?? 0, "teal")}
-        ${kpi("Handshakes", s.captures ?? 0, s.captures > 0 ? "ok" : "")}
-        ${kpi("Cracked", s.cracked ?? 0, s.cracked > 0 ? "ok" : "")}
-        ${kpi("Queue", cq.queued ?? 0, cq.queued > 0 ? "warn" : "")}
-      </div>
+      ${kpi("Networks", s.networks ?? 0, "teal")}
+      ${kpi("Clients", s.clients ?? 0, "teal")}
+      ${kpi("Handshakes", s.captures ?? 0, s.captures > 0 ? "ok" : "")}
+      ${kpi("Cracked", s.cracked ?? 0, s.cracked > 0 ? "ok" : "")}
+      ${kpi("Queue", cq.queued ?? 0, cq.queued > 0 ? "warn" : "")}
     </div>
     <div class="dash-panels">
       ${recentNetworksPanel(recentNets)}
@@ -195,7 +192,7 @@ function viewOverview(status, xplt, recentNets = [], recentEvents = []) {
 }
 
 function recentNetworksPanel(nets = []) {
-  const top5 = nets.slice(0, 5);
+  const top5 = nets.slice(0, 3);
   const body = top5.length === 0
     ? `<div class="dash-panel-body rm-empty"><div class="rm-empty-icon">📶</div><p>No networks yet</p></div>`
     : `<table class="dash-table">

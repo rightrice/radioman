@@ -87,11 +87,11 @@ body {
   max-width: 1400px;
   margin: 0 auto;
   padding: 0 1.5rem;
-  min-height: 64px;
-  display: flex;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 1rem;
-  flex-wrap: wrap;
 }
 
 .rm-logo-mark {
@@ -147,8 +147,8 @@ body {
 .rm-nav {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.25rem;
-  flex: 1;
   flex-wrap: wrap;
 }
 
@@ -228,16 +228,6 @@ body {
 .rm-teal   { color: var(--rm-teal); }
 
 /* ── Status card (left panel of overview grid) ──────────────── */
-.rm-status-card {
-  background: var(--aap-surface);
-  border: 1px solid var(--aap-line);
-  border-radius: 6px;
-  padding: 1.25rem 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  min-height: 160px;
-}
 
 .rm-scan-indicator {
   display: flex;
@@ -290,19 +280,20 @@ body {
 .rm-hearts { letter-spacing: -0.05em; color: var(--rm-red); }
 .rm-charging { color: var(--rm-green); font-size: 0.8rem; }
 
-/* ── Overview grid ──────────────────────────────────────────── */
-.rm-overview-grid {
-  display: grid;
-  grid-template-columns: 220px 1fr;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
+.rm-battery-sm {
+  font-size: 0.75rem;
+  gap: 0.35rem;
 }
 
-.rm-kpi-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+/* ── Overview grid ──────────────────────────────────────────── */
+/* ── Overview tile row ──────────────────────────────────────── */
+.rm-tile-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: stretch;
   gap: 0.75rem;
-  align-content: start;
+  margin-bottom: 1.5rem;
 }
 
 /* ── KPI cards ──────────────────────────────────────────────── */
@@ -314,6 +305,14 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  min-width: 130px;
+  flex: 0 0 auto;
+}
+
+/* ── Scan control tile ──────────────────────────────────────── */
+.rm-scan-tile {
+  min-width: 160px;
+  gap: 0.5rem;
 }
 
 .dash-kpi-label {
@@ -354,6 +353,24 @@ body {
   overflow: hidden;
 }
 
+/* Overview preview panels — fixed height so the page doesn't sprawl */
+.dash-panels .dash-panel {
+  max-height: 240px;
+  display: flex;
+  flex-direction: column;
+}
+
+.dash-panels .dash-panel .dash-panel-header {
+  flex-shrink: 0;
+}
+
+.dash-panels .dash-panel .dash-table-scroll,
+.dash-panels .dash-panel .rm-log-list,
+.dash-panels .dash-panel .rm-empty {
+  overflow-y: auto;
+  flex: 1;
+}
+
 .dash-panel-full { grid-column: 1 / -1; }
 
 .dash-panel-header {
@@ -374,11 +391,27 @@ body {
 
 .dash-panel-body { padding: 0.2rem 0; }
 
+/* ── Scrollbars ─────────────────────────────────────────────── */
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--aap-frame-line) transparent;
+}
+
+/* WebKit */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--aap-frame-line);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--rm-teal); }
+::-webkit-scrollbar-corner { background: transparent; }
+
 /* ── Tables ─────────────────────────────────────────────────── */
 .dash-table-scroll {
   overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(217, 98, 42, 0.3) transparent;
 }
 
 .dash-table {
@@ -616,13 +649,6 @@ body {
   background: var(--rm-red-soft);
   border-color: rgba(224, 88, 88, 0.35);
   color: var(--rm-red);
-}
-.rm-scan-status {
-  text-align: center;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  margin-top: 0.4rem;
 }
 .rm-scan-on  { color: var(--rm-teal); }
 .rm-scan-off { color: var(--aap-muted, #64748b); }
@@ -988,6 +1014,13 @@ body {
   background: var(--aap-surface-strong);
 }
 
+.dash-header-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 /* ── Theme toggle button ─────────────────────────────────────── */
 .dash-theme-btn {
   display: flex;
@@ -1017,15 +1050,15 @@ body {
 
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 900px) {
-  .rm-overview-grid { grid-template-columns: 1fr; }
   .dash-panels { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 600px) {
-  .dash-header-inner { padding: 0.5rem 1rem; gap: 0.5rem; }
+  .dash-header-inner { padding: 0.5rem 1rem; gap: 0.5rem; grid-template-columns: auto 1fr auto; }
   .rm-nav-btn { font-size: 0.75rem; padding: 0.35rem 0.65rem; }
   .dash-main  { padding: 1rem 1rem 2rem; }
-  .rm-kpi-row { grid-template-columns: repeat(2, 1fr); }
+  .rm-tile-row { justify-content: flex-start; }
+  .dash-kpi-card { min-width: calc(50% - 0.375rem); flex: 1 1 calc(50% - 0.375rem); }
   .rm-log-row { grid-template-columns: 1fr; gap: 0.2rem; }
   .rm-log-ts  { display: none; }
 }
