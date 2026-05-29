@@ -1,5 +1,6 @@
 #!/bin/bash
 # radioman update script
+# Kali Linux ARM — Raspberry Pi Zero 2W
 # Run from the cloned git repo after git pull:
 #   cd /path/to/radioman && git pull && sudo bash setup/update.sh
 #

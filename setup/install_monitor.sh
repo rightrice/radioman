@@ -1,18 +1,17 @@
 #!/bin/bash
-# install_monitor.sh — set up Wi-Fi monitor mode on Raspberry Pi Zero 2W
+# install_monitor.sh — install and verify Wi-Fi monitor mode on Raspberry Pi Zero 2W
 #
-# The Pi Zero 2W's BCM43430A1 chip (Cypress firmware 7.45.96.s1) supports
-# creating a VDEV monitor interface alongside the managed wlan0 interface.
-# No nexmon firmware patching is required.
+# On Kali Linux, monitor mode is enabled via the brcmfmac-nexmon-dkms package.
+# This patches the brcmfmac kernel driver to allow monitor mode with the stock
+# Cypress firmware — no firmware replacement is needed or wanted.
+#
+# CRITICAL: Do NOT install firmware-nexmon. It replaces Cypress firmware files
+# and crashes the BCM43430A1 (Pi Zero 2W) due to chip revision mismatch.
 #
 # Usage:
 #   sudo bash setup/install_monitor.sh
 #
-# What it does:
-#   1. Removes nexmon packages if installed (they crash this chip revision)
-#   2. Restores original Cypress firmware if nexmon modified it
-#   3. Removes the 6.12 kernel boot override from config.txt if present
-#   4. Verifies VDEV monitor mode works
+# Safe to run multiple times. Also repairs a broken nexmon DKMS install.
 
 set -e
 
@@ -32,98 +31,115 @@ info() { echo -e "${BLUE}[info]${NC} $1"; }
 IFACE="${1:-wlan0}"
 MON_IFACE="mon0"
 
-# ── Remove nexmon packages ────────────────────────────────────────────────────
-for pkg in brcmfmac-nexmon-dkms firmware-nexmon; do
-  if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
-    log "Removing $pkg..."
-    apt-get remove -y "$pkg" 2>/dev/null || dpkg --remove "$pkg" 2>/dev/null || true
-  fi
-done
+# ── Block firmware-nexmon ─────────────────────────────────────────────────────
+# Hold the package so it can't be pulled in accidentally by apt
+apt-mark hold firmware-nexmon 2>/dev/null || true
 
-# ── Restore original firmware if nexmon modified it ───────────────────────────
-# Download and extract the original firmware package to restore any modified files
-BRCM_FW="/usr/lib/firmware/brcm"
-CYPRESS_FW="/usr/lib/firmware/cypress"
+# If firmware-nexmon is already installed, remove it and restore original firmware
+if dpkg -l firmware-nexmon 2>/dev/null | grep -q "^ii"; then
+  warn "firmware-nexmon is installed — removing it (crashes BCM43430A1)"
+  apt-mark unhold firmware-nexmon 2>/dev/null || true
+  apt-get remove -y firmware-nexmon 2>/dev/null || true
+  apt-mark hold firmware-nexmon 2>/dev/null || true
 
-# Check if the board-specific firmware is the nexmon build (374608 bytes)
-BOARD_FW=$(readlink -f "$BRCM_FW/brcmfmac43430-sdio.raspberrypi,model-zero-2-w.bin" 2>/dev/null || true)
-if [ -n "$BOARD_FW" ]; then
-  SIZE=$(wc -c < "$BOARD_FW" 2>/dev/null || echo 0)
-  if [ "$SIZE" -lt 390000 ]; then
-    warn "Board firmware looks like nexmon (${SIZE} bytes) — restoring original..."
-    ORIG_DEB=$(mktemp -d)
-    apt-get download firmware-brcm80211 -o Dir::Cache="$ORIG_DEB" 2>/dev/null || \
-      apt-get download firmware-brcm80211 2>/dev/null || true
-    DEB=$(find "$ORIG_DEB" /tmp -name "firmware-brcm80211*.deb" 2>/dev/null | head -1)
-    if [ -n "$DEB" ]; then
-      EXTRACT=$(mktemp -d)
-      dpkg-deb -x "$DEB" "$EXTRACT"
-      for src in \
-        "$EXTRACT/usr/lib/firmware/brcm/brcmfmac43436s-sdio.bin" \
-        "$EXTRACT/usr/lib/firmware/cypress/cyfmac43430-sdio.bin" \
-        "$EXTRACT/usr/lib/firmware/brcm/brcmfmac43430-sdio.raspberrypi,model-zero-2-w.txt"; do
-        [ -f "$src" ] && cp "$src" "${src/$EXTRACT/}" && info "Restored $(basename $src)"
-      done
-      rm -rf "$EXTRACT" "$ORIG_DEB"
-    else
-      warn "Could not download firmware-brcm80211 — restore manually if needed"
-    fi
+  # Restore original Cypress firmware
+  log "Restoring stock Cypress firmware..."
+  apt-get install -y --reinstall firmware-brcm80211 2>/dev/null && \
+    log "firmware-brcm80211 reinstalled" || \
+    warn "Could not reinstall firmware-brcm80211 — check dmesg for ENOENT firmware errors"
+fi
+
+# ── Ensure linux-headers are installed ────────────────────────────────────────
+KERNEL=$(uname -r)
+log "Kernel: $KERNEL"
+
+if ! dpkg -l "linux-headers-${KERNEL}" 2>/dev/null | grep -q "^ii"; then
+  log "Installing linux-headers-${KERNEL}..."
+  apt-get install -y "linux-headers-${KERNEL}" 2>/dev/null || \
+    apt-get install -y linux-headers-$(uname -r | sed 's/+.*//')-rpi-v8 2>/dev/null || \
+    warn "Could not install kernel headers — DKMS build may fail"
+fi
+
+# ── Install brcmfmac-nexmon-dkms ──────────────────────────────────────────────
+if dpkg -l brcmfmac-nexmon-dkms 2>/dev/null | grep -q "^ii"; then
+  log "brcmfmac-nexmon-dkms already installed"
+  DKMS_STATUS=$(dkms status brcmfmac-nexmon 2>/dev/null | head -1 || echo "")
+  if echo "$DKMS_STATUS" | grep -qi "installed\|built"; then
+    info "DKMS module status: $DKMS_STATUS"
   else
-    info "Firmware looks like original Cypress (${SIZE} bytes) — no restore needed"
+    warn "DKMS module not built — rebuilding for kernel $KERNEL..."
+    NEXMON_VER=$(dkms status brcmfmac-nexmon 2>/dev/null | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | head -1 || echo "")
+    if [ -n "$NEXMON_VER" ]; then
+      dkms build -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" 2>/dev/null && \
+      dkms install -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" 2>/dev/null && \
+        log "DKMS module rebuilt and installed" || \
+        warn "DKMS rebuild failed — check: dkms status && dmesg | grep nexmon"
+    fi
+  fi
+else
+  log "Installing brcmfmac-nexmon-dkms..."
+  apt-get update -qq
+  if apt-get install -y brcmfmac-nexmon-dkms 2>/dev/null; then
+    log "brcmfmac-nexmon-dkms installed"
+  else
+    # Try adding Kali contrib explicitly
+    warn "Package not found — checking sources..."
+    SOURCES=$(cat /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true)
+    if ! echo "$SOURCES" | grep -q "kali"; then
+      warn "No Kali repository detected. This script is designed for Kali Linux."
+      warn "If you're on Kali, try: apt-get install -y brcmfmac-nexmon-dkms"
+      warn "If the package still isn't found, run: apt-get update && apt-cache search nexmon"
+      err "brcmfmac-nexmon-dkms not available. Cannot enable monitor mode."
+    fi
+    err "brcmfmac-nexmon-dkms install failed — run: apt-get update && apt-get install brcmfmac-nexmon-dkms"
   fi
 fi
 
-# Remove any empty CLM blob we created as a nexmon workaround
-CLM_STUB="$BRCM_FW/brcmfmac43430-sdio.raspberrypi,model-zero-2-w.clm_blob"
-if [ -f "$CLM_STUB" ] && [ ! -s "$CLM_STUB" ]; then
-  rm -f "$CLM_STUB"
-  info "Removed empty CLM blob stub"
-fi
-
-# ── Remove 6.12 kernel boot override ─────────────────────────────────────────
-CONFIG_TXT="/boot/firmware/config.txt"
-if grep -q "^kernel=vmlinuz-6.12" "$CONFIG_TXT" 2>/dev/null; then
-  log "Removing 6.12 kernel override from config.txt..."
-  # Remove the block we added (kernel= and initramfs= lines + comment)
-  sed -i '/^# Boot kernel 6\.12/d' "$CONFIG_TXT"
-  sed -i '/^kernel=vmlinuz-6\.12/d' "$CONFIG_TXT"
-  sed -i '/^initramfs initrd-6\.12/d' "$CONFIG_TXT"
-  info "config.txt restored — will boot default kernel on next reboot"
-fi
-
-# Remove copied kernel/initrd files from boot partition
-for f in /boot/firmware/vmlinuz-6.12-rpi-v8 /boot/firmware/initrd-6.12-rpi-v8; do
-  [ -f "$f" ] && rm -f "$f" && info "Removed $(basename $f)"
-done
-
-# ── Reload driver with original firmware ──────────────────────────────────────
-log "Reloading brcmfmac..."
+# ── Reload brcmfmac with nexmon-patched module ────────────────────────────────
+log "Reloading brcmfmac driver..."
 ip link set "$MON_IFACE" down 2>/dev/null || true
 iw dev "$MON_IFACE" del 2>/dev/null || true
 modprobe -r brcmfmac brcmutil 2>/dev/null || true
 sleep 3
 modprobe brcmfmac 2>/dev/null || true
-sleep 5
+sleep 4
 
 # ── Verify wlan0 is back ──────────────────────────────────────────────────────
 if ! ip link show "$IFACE" &>/dev/null; then
-  err "$IFACE not found after driver reload — check dmesg for errors"
+  err "$IFACE not found after driver reload — check: dmesg | grep -i brcm"
 fi
-info "$IFACE is up"
+info "$IFACE is present"
 
-# ── Test VDEV monitor mode ────────────────────────────────────────────────────
-log "Testing VDEV monitor mode..."
+# ── Test monitor mode ─────────────────────────────────────────────────────────
+log "Testing monitor mode..."
+
+# Test 1: VDEV interface (preferred — keeps wlan0 in managed mode)
 iw dev "$MON_IFACE" del 2>/dev/null || true
-
 PHY=$(iw dev "$IFACE" info 2>/dev/null | awk '/wiphy/{print "phy"$NF}')
 [ -z "$PHY" ] && PHY="phy0"
 
-if iw phy "$PHY" interface add "$MON_IFACE" type monitor 2>/dev/null && \
-   ip link set "$MON_IFACE" up 2>/dev/null; then
-  log "Monitor mode working: $MON_IFACE on $PHY"
-  iw dev "$MON_IFACE" del 2>/dev/null || true
+VDEV_OK=false
+if iw phy "$PHY" interface add "$MON_IFACE" type monitor 2>/dev/null; then
+  if ip link set "$MON_IFACE" up 2>/dev/null; then
+    log "VDEV monitor interface $MON_IFACE is up on $PHY"
+    VDEV_OK=true
+    iw dev "$MON_IFACE" del 2>/dev/null || true
+  fi
+fi
+
+# Test 2: airmon-ng check
+if command -v airmon-ng &>/dev/null; then
+  AIRMON_OUT=$(airmon-ng 2>/dev/null | grep "$IFACE" || echo "")
+  if echo "$AIRMON_OUT" | grep -q "monitor"; then
+    info "airmon-ng reports $IFACE supports monitor mode"
+  fi
+fi
+
+if $VDEV_OK; then
+  log "Monitor mode: WORKING"
 else
-  warn "VDEV monitor mode test failed — check 'dmesg | grep brcm'"
+  warn "VDEV monitor mode test failed — check: dmesg | grep -i 'brcm\|monitor'"
+  warn "If the kernel just changed, a reboot may be required."
 fi
 
 echo ""
@@ -132,12 +148,9 @@ log " Monitor mode setup complete"
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 info "radioman creates mon0 automatically when scanning starts."
-info "No manual setup needed — just start a scan from the dashboard."
-if grep -q "^kernel=vmlinuz-6\.12" "$CONFIG_TXT" 2>/dev/null; then
-  : # already removed above
-else
-  KERNEL=$(uname -r)
-  if [[ "$KERNEL" == 6.12* ]]; then
-    warn "Still booted into kernel 6.12 — reboot to return to default kernel"
-  fi
+info "No manual interface setup needed — just start a scan from the dashboard."
+echo ""
+if ! $VDEV_OK; then
+  warn "Monitor mode test failed. Try rebooting: sudo reboot"
+  warn "Then re-run this script to verify."
 fi

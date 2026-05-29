@@ -10,7 +10,7 @@ Combines the spirit of Pwnagotchi, Ubiquiti WiFiman, and the Aircrack-ng suite.
 | SBC | Raspberry Pi Zero 2W |
 | Battery | PiSugar 2 |
 | Display | Waveshare 2.13" e-ink (250×122) |
-| Radio | Internal CYW43439 (monitor mode) |
+| Radio | Internal BCM43430A1 (CYW43438) — monitor mode via nexmon DKMS |
 
 ## Features
 
@@ -21,7 +21,7 @@ Combines the spirit of Pwnagotchi, Ubiquiti WiFiman, and the Aircrack-ng suite.
 - **LAN host discovery** — passive ARP + on-demand nmap scan
 - **Local AI assistant** — IBM Granite 4.0 350M running via llama.cpp, chat + network analysis
 - **XPLT cloud sync** — pushes networks, clients, and captures to the XPLT platform
-- **Tamagotchi personality** — mood engine with ASCII faces on the e-ink display
+- **Tamagotchi personality** — mood engine reflected on the e-ink display
 - **PiSugar 2 battery** — heart-strip display, charging indicator via direct I2C
 - **Web dashboard** — dark/light theme, auto-refresh, capture downloads
 
@@ -29,20 +29,26 @@ Combines the spirit of Pwnagotchi, Ubiquiti WiFiman, and the Aircrack-ng suite.
 
 ## Install
 
-### 1. Flash Pi OS
+### 1. Flash Kali Linux
 
-Flash **Raspberry Pi OS Lite 64-bit (Bookworm)** to SD card using Raspberry Pi Imager.
-In Imager advanced settings: enable SSH, set hostname to `radioman`, set username `pi`.
+Download the **Kali Linux Raspberry Pi ARM** image from [kali.org/get-kali](https://www.kali.org/get-kali/#kali-arm).
+Use the **64-bit** image for the Pi Zero 2W.
+
+Flash to SD card with Raspberry Pi Imager or Balena Etcher.
+
+> **First boot credentials:** `kali` / `kali`
+> Change the password immediately: `passwd`
 
 ### 2. First boot
 
-SSH in over WiFi:
-```bash
-ssh pi@radioman.local
-```
+Connect the Pi to your home WiFi or plug in the USB cable (see section 4 first).
+Then SSH in:
 
-> **Note:** radioman creates a virtual monitor interface (`mon0`) alongside `wlan0` during scanning — `wlan0` is disconnected from WiFi while scanning is active.
-> Use the USB cable (10.55.0.1) as your primary management connection after setup.
+```bash
+ssh kali@radioman.local
+# or by IP if mDNS isn't working yet:
+ssh kali@<pi-ip>
+```
 
 ### 3. Clone and install
 
@@ -53,11 +59,22 @@ sudo bash setup/install.sh
 sudo reboot
 ```
 
-`install.sh` configures swap, zram, SPI, I2C, USB gadget ethernet, bettercap, aircrack-ng, hcxtools, hashcat, and the radioman systemd service.
+`install.sh` handles:
+- Sets hostname to `radioman`
+- Swap + zram (memory management for 512MB RAM)
+- nexmon DKMS install (monitor mode — no firmware-nexmon)
+- Security tools verification (Kali pre-installs most)
+- SPI, I2C, USB gadget ethernet
+- Python venv, Waveshare library, radioman service
+
+> **Note:** `brcmfmac-nexmon-dkms` patches the brcmfmac kernel driver to allow
+> monitor mode with the stock Cypress firmware. `firmware-nexmon` is explicitly
+> **not** installed — it replaces Cypress firmware files and crashes the
+> BCM43430A1 (chip revision mismatch).
 
 ### 4. USB gadget ethernet (recommended)
 
-After reboot, connect the Pi to your Mac via USB **data** cable (not the PWR port) and run:
+After reboot, connect the Pi to your Mac via USB **data** cable (not the PWR port) and run on your Mac:
 
 ```bash
 bash scripts/mac_connect.sh
@@ -67,7 +84,7 @@ This sets your Mac USB interface to `10.55.0.2` and verifies the Pi is reachable
 
 SSH over USB:
 ```bash
-ssh pi@10.55.0.1
+ssh kali@10.55.0.1
 ```
 
 **If the USB interface shows "Self-assigned IP" or `169.254.x.x` in System Settings:**
@@ -83,14 +100,14 @@ This happens because macOS tries DHCP and the Pi doesn't run a DHCP server on `u
 
 **If the USB gadget disappears after every reboot:**
 
-The `g_ether` kernel module randomises its MAC by default — macOS sees a new device each boot. `install.sh` sets a persistent MAC via `/etc/modprobe.d/g_ether.conf`, so this should not happen on a fresh install. If it does, run on the Pi:
+The `g_ether` kernel module randomises its MAC by default — macOS sees a new device each boot. `install.sh` sets a persistent MAC via `/etc/modprobe.d/g_ether.conf`. If it happens anyway, run on the Pi:
 
 ```bash
 echo "options g_ether host_addr=72:48:4f:52:4d:01 dev_addr=72:48:4f:52:4d:02" | sudo tee /etc/modprobe.d/g_ether.conf
 sudo rmmod g_ether && sudo modprobe g_ether
 ```
 
-**Internet sharing (Pi needs internet for git pull, apt, etc.):**
+### 5. Internet sharing (Pi needs internet for git pull, apt, etc.)
 
 Run on your Mac each time you need the Pi to have internet access:
 
@@ -100,18 +117,7 @@ bash scripts/mac_connect.sh share
 
 This enables NAT via pfctl so the Pi routes through your Mac's WiFi. **The rule does not survive Mac sleep or reboot** — re-run it whenever you lose Pi internet.
 
-One-time Pi-side setup (do this once after `install.sh`):
-
-```bash
-# Add default gateway and DNS to the usb-gadget NM profile
-sudo nmcli connection modify usb-gadget \
-  ipv4.gateway 10.55.0.2 \
-  ipv4.never-default no \
-  ipv4.dns "1.1.1.1 8.8.8.8"
-sudo nmcli connection up usb-gadget
-```
-
-After this the Pi knows to route through the Mac and resolve DNS — you only need to re-run `mac_connect.sh share` on the Mac side after each sleep/reboot.
+`install.sh` already configures the usb-gadget NM profile with gateway `10.55.0.2` and DNS `1.1.1.1` — no extra Pi-side steps needed.
 
 **Verify:**
 ```bash
@@ -120,7 +126,7 @@ ping -c 2 1.1.1.1       # IP routing works
 ping -c 2 github.com    # DNS works
 ```
 
-### 5. Configure
+### 6. Configure
 
 Edit `/opt/radioman/radioman.conf`:
 
@@ -147,24 +153,27 @@ rssi_history_hours = 24
 device_token =         # set after pairing in dashboard
 ```
 
-### 6. Monitor mode
+### 7. Monitor mode
 
-The Pi Zero 2W's BCM43430A1 chip supports VDEV monitor mode with its stock Cypress firmware — no nexmon patching required. radioman creates `mon0` automatically when scanning starts.
+Monitor mode is enabled by the `brcmfmac-nexmon-dkms` package installed in step 3.
+It creates a virtual `mon0` interface alongside `wlan0` so WiFi connectivity is
+maintained while scanning.
 
-If you previously installed nexmon (packages `brcmfmac-nexmon-dkms` or `firmware-nexmon`), clean up with:
+If you need to verify or repair monitor mode manually:
 
 ```bash
 sudo bash setup/install_monitor.sh
-sudo reboot
 ```
 
-This removes nexmon packages, restores the original Cypress firmware, and verifies VDEV monitor mode works.
+This installs the DKMS package if missing, reloads the driver, and tests that
+`mon0` can be created. Safe to run multiple times.
 
----
+> **Important:** `wlan0` disconnects from WiFi while bettercap is scanning on `mon0`.
+> Use the USB cable (10.55.0.1) as your primary management connection.
 
-### 7. Install AI (optional)
+### 8. Install AI (optional)
 
-The AI assistant requires a pre-built `llama-cli` binary (cross-compile from a more powerful machine) and the Granite model download.
+The AI assistant requires a pre-built `llama-cli` binary and the Granite model.
 
 **Step 1 — Build llama-cli** (run on WSL2 Ubuntu or a Linux machine, not the Pi):
 ```bash
@@ -203,8 +212,8 @@ Updates daemon files, web assets, caplet, and service. Never touches `radioman.c
 | Interface | Address |
 |---|---|
 | Web dashboard | `http://radioman.local:8080` |
-| USB SSH | `ssh pi@10.55.0.1` |
-| WiFi SSH | `ssh pi@radioman.local` (only when not scanning) |
+| USB SSH | `ssh kali@10.55.0.1` |
+| WiFi SSH | `ssh kali@radioman.local` (only when not scanning) |
 | Logs | `journalctl -u radioman -f` |
 | Captures | `/opt/radioman/captures/` |
 
@@ -223,19 +232,20 @@ radioman/
 │   ├── capture.py              # bettercap integration
 │   ├── cracker.py              # hashcat + aircrack-ng queue
 │   ├── scanner.py              # Network discovery (ARP + nmap)
-│   ├── personality.py          # Mood engine + ASCII faces
+│   ├── personality.py          # Mood engine
 │   ├── display.py              # Waveshare e-ink driver
 │   ├── battery.py              # PiSugar 2 I2C integration
 │   ├── db.py                   # SQLite database
 │   └── xplt.py                 # XPLT cloud sync
 ├── scripts/
-│   ├── mac_connect.sh          # Mac-side USB gadget setup
+│   ├── mac_connect.sh          # Mac-side USB gadget + internet sharing setup
 │   └── build_llama_wsl.sh      # Cross-compile llama-cli (WSL2)
 ├── setup/
-│   ├── install.sh              # Full install script
+│   ├── install.sh              # Full install script (Kali Linux)
+│   ├── install_monitor.sh      # Install / verify nexmon DKMS monitor mode
 │   ├── install_ai.sh           # AI model + binary installer
-│   ├── install_monitor.sh      # Clean up nexmon; verify VDEV monitor mode
-│   ├── update.sh               # Update deployed files
+│   ├── install_pisugar.sh      # PiSugar 2 battery setup
+│   ├── update.sh               # Update deployed files after git pull
 │   ├── radioman.service        # systemd service
 │   └── radioman.cap            # bettercap caplet
 └── web/

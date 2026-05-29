@@ -1,6 +1,6 @@
 #!/bin/bash
 # radioman install script
-# Raspberry Pi Zero 2W — Raspberry Pi OS Lite 64-bit (Bookworm)
+# Kali Linux ARM — Raspberry Pi Zero 2W
 # Run as root: sudo bash setup/install.sh
 
 set -e
@@ -25,127 +25,132 @@ info() { echo -e "${BLUE}[info]${NC} $1"; }
 log "Starting radioman installation..."
 echo ""
 
+# ── Hostname ───────────────────────────────────────────────────────────────────
+CURRENT_HOST=$(hostname)
+if [ "$CURRENT_HOST" != "radioman" ]; then
+  log "Setting hostname to radioman..."
+  hostnamectl set-hostname radioman
+  # Update /etc/hosts to avoid sudo warnings
+  if ! grep -q "radioman" /etc/hosts; then
+    sed -i "s/127.0.1.1.*/127.0.1.1\tradioman/" /etc/hosts 2>/dev/null || \
+      echo "127.0.1.1	radioman" >> /etc/hosts
+  fi
+  log "Hostname set to radioman (effective after reboot)"
+else
+  info "Hostname already set to radioman"
+fi
+
 # ── System update ──────────────────────────────────────────────────────────────
 log "Updating system packages..."
 apt-get update -qq
 apt-get upgrade -y -qq
 
-# ── Swap + zram (critical for 512MB Pi Zero 2W) ────────────────────────────────
-log "Configuring swap and zram..."
+# ── Swap (critical for 512MB Pi Zero 2W) ──────────────────────────────────────
+log "Configuring swap..."
 
-# Set permanent 2GB swap — safe with 21GB+ SD card, needed for llama.cpp builds
-DPHYS_CONF="/etc/dphys-swapfile"
-if [ -f "$DPHYS_CONF" ]; then
-  sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' "$DPHYS_CONF"
-  # Remove any cap that would limit swap below 2GB
-  sed -i 's/^#*CONF_MAXSWAP=.*/CONF_MAXSWAP=2048/' "$DPHYS_CONF"
-  dphys-swapfile swapoff 2>/dev/null || true
-  dphys-swapfile setup
-  dphys-swapfile swapon
-  log "Swap set to 2GB"
+if command -v dphys-swapfile &>/dev/null || apt-get install -y -qq dphys-swapfile 2>/dev/null; then
+  DPHYS_CONF="/etc/dphys-swapfile"
+  if [ -f "$DPHYS_CONF" ]; then
+    sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' "$DPHYS_CONF"
+    sed -i 's/^#*CONF_MAXSWAP=.*/CONF_MAXSWAP=2048/' "$DPHYS_CONF"
+    dphys-swapfile swapoff 2>/dev/null || true
+    dphys-swapfile setup
+    dphys-swapfile swapon
+    log "dphys swap set to 2GB"
+  fi
+else
+  # Fallback: manual swapfile
+  if [ ! -f /swapfile ]; then
+    fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    log "Manual 2GB swapfile created"
+  else
+    info "Swapfile already exists"
+  fi
 fi
 
-# zram — compressed in-memory swap, used before SD card swap
-# lz4 compression gives ~2x ratio with minimal CPU overhead on ARM
-apt-get install -y -qq zram-tools
-cat > /etc/default/zramswap <<'EOF'
+# zram — compressed in-memory swap (lz4, minimal CPU overhead on ARM)
+apt-get install -y -qq zram-tools 2>/dev/null || true
+if command -v zramctl &>/dev/null; then
+  cat > /etc/default/zramswap <<'EOF'
 ALGO=lz4
 PERCENT=50
 EOF
-systemctl enable zramswap 2>/dev/null || true
-systemctl restart zramswap 2>/dev/null || true
-log "zram enabled (lz4, 50% of RAM)"
+  systemctl enable zramswap 2>/dev/null || true
+  systemctl restart zramswap 2>/dev/null || true
+  log "zram enabled (lz4, 50% of RAM)"
+fi
 
 # ── Core system dependencies ───────────────────────────────────────────────────
 log "Installing system dependencies..."
 apt-get install -y -qq \
   python3 python3-pip python3-venv python3-dev \
-  python3-lgpio \
   git curl wget unzip ca-certificates \
   sqlite3 \
-  nmap \
-  aircrack-ng \
   iw wireless-tools rfkill \
   i2c-tools \
   libssl-dev libffi-dev \
   libpcap-dev libpcap0.8 \
-  libcurl4-openssl-dev \
-  libhwloc-dev \
   libjpeg-dev zlib1g-dev \
   libusb-1.0-0-dev \
-  swig \
-  liblgpio-dev \
-  fonts-dejavu-core \
   fonts-noto \
-  avahi-daemon
+  avahi-daemon \
+  dkms \
+  linux-headers-$(uname -r) 2>/dev/null || true
 
-# ── hcxtools (PMKID extraction) ────────────────────────────────────────────────
-if command -v hcxpcapngtool &>/dev/null; then
-  info "hcxtools already installed"
-else
-  log "Installing hcxtools..."
-  if apt-get install -y -qq hcxtools 2>/dev/null; then
-    log "hcxtools installed via apt"
+# ── Security tools (pre-installed on Kali, but ensure present) ─────────────────
+log "Verifying security tools..."
+
+for tool_pkg in "nmap:nmap" "aircrack-ng:aircrack-ng" "hcxpcapngtool:hcxtools" "hashcat:hashcat" "bettercap:bettercap"; do
+  tool="${tool_pkg%%:*}"
+  pkg="${tool_pkg##*:}"
+  if command -v "$tool" &>/dev/null; then
+    info "  [OK] $tool"
   else
-    warn "hcxtools not in apt — building from source..."
-    apt-get install -y -qq build-essential pkg-config
-    TMP=$(mktemp -d)
-    git clone --depth=1 -q https://github.com/ZerBea/hcxtools "$TMP/hcxtools"
-    make -C "$TMP/hcxtools" -j2 --quiet
-    make -C "$TMP/hcxtools" install --quiet
-    rm -rf "$TMP"
-    log "hcxtools built and installed"
+    log "Installing $pkg..."
+    apt-get install -y -qq "$pkg" 2>/dev/null && info "  [OK] $tool (installed)" || \
+      warn "  [MISSING] $tool — install manually: apt-get install $pkg"
+  fi
+done
+
+# ── nexmon DKMS (monitor mode for BCM43430A1) ──────────────────────────────────
+log "Installing nexmon DKMS (monitor mode support)..."
+# IMPORTANT: Install brcmfmac-nexmon-dkms ONLY — do NOT install firmware-nexmon.
+# firmware-nexmon replaces Cypress firmware and crashes BCM43430A1 (Pi Zero 2W).
+# The DKMS module patches the brcmfmac kernel driver to report monitor mode
+# capability with the stock Cypress firmware — no firmware replacement needed.
+if dpkg -l brcmfmac-nexmon-dkms 2>/dev/null | grep -q "^ii"; then
+  info "brcmfmac-nexmon-dkms already installed"
+else
+  if apt-get install -y brcmfmac-nexmon-dkms 2>/dev/null; then
+    log "nexmon DKMS installed — monitor mode enabled"
+  else
+    warn "brcmfmac-nexmon-dkms not found via apt"
+    warn "Run: sudo bash setup/install_monitor.sh  (will retry with contrib sources)"
   fi
 fi
 
-# ── hashcat (PMKID + EAPOL cracking) ──────────────────────────────────────────
-if command -v hashcat &>/dev/null; then
-  info "hashcat already installed"
-else
-  log "Installing hashcat..."
-  if apt-get install -y -qq hashcat 2>/dev/null; then
-    log "hashcat installed via apt"
-  else
-    warn "hashcat not in apt — building from source..."
-    apt-get install -y -qq build-essential pkg-config libssl-dev
-    TMP=$(mktemp -d)
-    HC_VER=$(curl -s https://api.github.com/repos/hashcat/hashcat/releases/latest \
-             | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
-    wget -q "https://github.com/hashcat/hashcat/releases/download/v${HC_VER}/hashcat-${HC_VER}.tar.gz" \
-      -O "$TMP/hashcat.tar.gz"
-    tar -xzf "$TMP/hashcat.tar.gz" -C "$TMP"
-    make -C "$TMP/hashcat-${HC_VER}" -j2 --quiet
-    cp "$TMP/hashcat-${HC_VER}/hashcat" /usr/local/bin/hashcat
-    cp -r "$TMP/hashcat-${HC_VER}/OpenCL" /usr/local/share/hashcat-opencl 2>/dev/null || true
-    rm -rf "$TMP"
-    log "hashcat built and installed"
-  fi
+# Pin firmware-nexmon to prevent accidental install — it crashes BCM43430A1
+if ! dpkg -l firmware-nexmon 2>/dev/null | grep -q "^ii"; then
+  apt-mark hold firmware-nexmon 2>/dev/null || true
 fi
 
-# ── bettercap ──────────────────────────────────────────────────────────────────
-log "Installing bettercap..."
-if ! command -v bettercap &>/dev/null; then
-  apt-get install -y -qq bettercap && log "bettercap installed via apt" || {
-    warn "apt install failed — downloading arm64 binary..."
-    BC_VER=$(curl -s https://api.github.com/repos/bettercap/bettercap/releases/latest \
-             | grep '"tag_name"' | cut -d'"' -f4)
-    BC_URL="https://github.com/bettercap/bettercap/releases/download/${BC_VER}/bettercap_linux_arm64_${BC_VER}.zip"
-    wget -q "$BC_URL" -O /tmp/bettercap.zip
-    unzip -q /tmp/bettercap.zip -d /tmp/bettercap_tmp
-    mv /tmp/bettercap_tmp/bettercap /usr/local/bin/bettercap
-    chmod +x /usr/local/bin/bettercap
-    rm -rf /tmp/bettercap_tmp /tmp/bettercap.zip
-    log "bettercap binary installed"
-  }
-else
-  info "bettercap already installed"
+# Reload brcmfmac with nexmon DKMS module if it was just installed
+if dpkg -l brcmfmac-nexmon-dkms 2>/dev/null | grep -q "^ii"; then
+  log "Reloading brcmfmac with nexmon DKMS module..."
+  modprobe -r brcmfmac brcmutil 2>/dev/null || true
+  sleep 3
+  modprobe brcmfmac 2>/dev/null || true
+  sleep 3
 fi
 
-setcap cap_net_raw,cap_net_admin+eip "$(command -v bettercap)" 2>/dev/null || \
-  warn "Could not set bettercap capabilities — will require sudo"
-
-# Disable the bettercap system service — radioman manages bettercap itself
-systemctl disable --now bettercap 2>/dev/null || true
+# ── bettercap capabilities ─────────────────────────────────────────────────────
+if command -v bettercap &>/dev/null; then
+  setcap cap_net_raw,cap_net_admin+eip "$(command -v bettercap)" 2>/dev/null || \
+    warn "Could not set bettercap capabilities — will require sudo"
+  # Disable the bettercap system service — radioman manages bettercap itself
+  systemctl disable --now bettercap 2>/dev/null || true
+fi
 
 # ── Waveshare e-ink library ────────────────────────────────────────────────────
 log "Installing Waveshare e-Paper library..."
@@ -156,20 +161,20 @@ else
   info "Waveshare library already present"
 fi
 
-# ── Enable SPI, I2C, and USB gadget mode ──────────────────────────────────────
+# ── Boot config (SPI, I2C, USB gadget) ────────────────────────────────────────
 log "Configuring boot options (SPI, I2C, USB gadget)..."
 
-# Ensure the boot partition is mounted — on Bookworm it's /boot/firmware (FAT32)
 if ! mountpoint -q /boot/firmware 2>/dev/null; then
   mount /boot/firmware 2>/dev/null && log "Mounted /boot/firmware" || \
     warn "Could not mount /boot/firmware — boot config edits may fail"
 fi
 
-# Prefer /boot/firmware (Bookworm) — only fall back to /boot if firmware path absent
 CONFIG_FILE="/boot/firmware/config.txt"
 [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/boot/config.txt"
+CMDLINE_FILE="/boot/firmware/cmdline.txt"
+[ ! -f "$CMDLINE_FILE" ] && CMDLINE_FILE="/boot/cmdline.txt"
 
-# Enable SPI — uncomment if commented, replace if set to off, append if absent
+# Enable SPI
 if grep -q "^#dtparam=spi=" "$CONFIG_FILE"; then
   sed -i 's/^#dtparam=spi=.*/dtparam=spi=on/' "$CONFIG_FILE"
 elif grep -q "^dtparam=spi=" "$CONFIG_FILE"; then
@@ -178,7 +183,7 @@ else
   echo "dtparam=spi=on" >> "$CONFIG_FILE"
 fi
 
-# Enable I2C — same three-way pattern
+# Enable I2C
 if grep -q "^#dtparam=i2c_arm=" "$CONFIG_FILE"; then
   sed -i 's/^#dtparam=i2c_arm=.*/dtparam=i2c_arm=on/' "$CONFIG_FILE"
 elif grep -q "^dtparam=i2c_arm=" "$CONFIG_FILE"; then
@@ -186,49 +191,39 @@ elif grep -q "^dtparam=i2c_arm=" "$CONFIG_FILE"; then
 else
   echo "dtparam=i2c_arm=on" >> "$CONFIG_FILE"
 fi
-
 log "SPI and I2C enabled in $CONFIG_FILE"
 
-# USB gadget ethernet (SSH over USB data cable)
-CMDLINE_FILE="/boot/firmware/cmdline.txt"
-[ ! -f "$CMDLINE_FILE" ] && CMDLINE_FILE="/boot/cmdline.txt"
-
-# Ensure dwc2 is present and NOT forced into host mode.
-# Pi Imager sometimes writes dtoverlay=dwc2,dr_mode=host which disables gadget mode.
-# Strip any dtoverlay=dwc2 line entirely, then append the correct one.
+# USB gadget ethernet — remove any existing dwc2 line and add the bare form
+# (Pi Imager sometimes adds dr_mode=host which disables gadget mode)
 sed -i '/^dtoverlay=dwc2/d' "$CONFIG_FILE"
 echo "dtoverlay=dwc2" >> "$CONFIG_FILE"
 log "dtoverlay=dwc2 set in $CONFIG_FILE"
 
-# Add g_ether to modules-load in cmdline.txt.
-# cmdline.txt is a single line — try anchoring on rootwait, then console=, then just append.
+# Add g_ether to modules-load in cmdline.txt (single-line file)
 if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
   if grep -q "rootwait" "$CMDLINE_FILE"; then
     sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
   elif grep -q "console=" "$CMDLINE_FILE"; then
-    # Prepend to the line as a fallback anchor
     sed -i 's/console=/modules-load=dwc2,g_ether console=/' "$CMDLINE_FILE"
   else
-    # Last resort — append to end of line
     sed -i '1s/$/ modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
   fi
 fi
 
 if grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
-  log "USB gadget ethernet enabled (modules-load=dwc2,g_ether in $CMDLINE_FILE)"
+  log "USB gadget ethernet enabled (modules-load=dwc2,g_ether)"
 else
-  warn "Could not add g_ether to $CMDLINE_FILE — edit it manually:"
-  warn "  Add:  modules-load=dwc2,g_ether  anywhere in the single line"
+  warn "Could not add g_ether to $CMDLINE_FILE — add it manually"
 fi
 
-# Fix g_ether MAC — random MAC per boot causes macOS to treat it as a new device
-# each reboot, losing the System Settings network profile. Persistent MACs fix this.
+# Persistent g_ether MAC — prevents macOS from treating each boot as a new device
 cat > /etc/modprobe.d/g_ether.conf <<'EOF'
 options g_ether host_addr=72:48:4f:52:4d:01 dev_addr=72:48:4f:52:4d:02
 EOF
 log "g_ether: persistent MAC configured"
 
-# Configure usb0 with a static IP so SSH over USB works without DHCP
+# Configure usb0 static IP with gateway and DNS so internet sharing works
+# without any extra Pi-side steps after reboot.
 if command -v nmcli &>/dev/null; then
   nmcli connection delete "usb-gadget" 2>/dev/null || true
   nmcli connection add \
@@ -237,9 +232,12 @@ if command -v nmcli &>/dev/null; then
     con-name "usb-gadget" \
     ipv4.method manual \
     ipv4.addresses "10.55.0.1/24" \
+    ipv4.gateway "10.55.0.2" \
+    ipv4.dns "1.1.1.1 8.8.8.8" \
+    ipv4.never-default no \
     ipv6.method disabled \
     connection.autoconnect yes 2>/dev/null && \
-    log "usb0 static IP configured (10.55.0.1) — set Mac or PC USB Gadget to 10.55.0.2" || \
+    log "usb0 configured (10.55.0.1, gw 10.55.0.2, DNS 1.1.1.1)" || \
     warn "Could not create usb0 NM profile — configure manually after reboot"
 fi
 
@@ -251,28 +249,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 log "Copying source files from $SCRIPT_DIR..."
 cp "$SCRIPT_DIR/daemon/"*.py "$RADIOMAN_DIR/"
 rm -rf "$RADIOMAN_DIR/web"
-cp -r "$SCRIPT_DIR/web"     "$RADIOMAN_DIR/web"
+cp -r "$SCRIPT_DIR/web" "$RADIOMAN_DIR/web"
 
-# Only create radioman.conf from the example if one doesn't exist yet.
-# This preserves any API keys the user has already configured.
 if [ ! -f "$RADIOMAN_DIR/radioman.conf" ]; then
   cp "$SCRIPT_DIR/config/radioman.conf.example" "$RADIOMAN_DIR/radioman.conf"
   warn "Created radioman.conf from example — edit it to add your XPLT keys."
 else
   info "radioman.conf already exists — skipping (your keys are safe)."
 fi
-cp "$SCRIPT_DIR/setup/radioman.cap"   "$RADIOMAN_DIR/radioman.cap"
+cp "$SCRIPT_DIR/setup/radioman.cap" "$RADIOMAN_DIR/radioman.cap"
 
 # ── Python virtual environment ─────────────────────────────────────────────────
 log "Creating Python virtual environment..."
 python3 -m venv --system-site-packages "$RADIOMAN_DIR/venv"
 "$RADIOMAN_DIR/venv/bin/pip" install --quiet --upgrade pip
-
 "$RADIOMAN_DIR/venv/bin/pip" install --quiet -r "$SCRIPT_DIR/requirements.txt"
-
 log "Python dependencies installed"
 
-# ── Install Waveshare library into venv site-packages ─────────────────────────
+# ── Waveshare library into venv ────────────────────────────────────────────────
 log "Installing Waveshare library into venv..."
 PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 SITE_PKG="$RADIOMAN_DIR/venv/lib/python${PY_VER}/site-packages"
@@ -289,15 +283,24 @@ fi
 # ── rockyou wordlist ───────────────────────────────────────────────────────────
 log "Setting up rockyou wordlist..."
 if [ ! -f "$WORDLISTS_DIR/rockyou.txt" ]; then
-  if [ -f "/usr/share/wordlists/rockyou.txt.gz" ]; then
+  # Kali ships rockyou at /usr/share/wordlists/
+  if [ -f "/usr/share/wordlists/rockyou.txt" ]; then
+    cp /usr/share/wordlists/rockyou.txt "$WORDLISTS_DIR/"
+    log "rockyou.txt copied from /usr/share/wordlists"
+  elif [ -f "/usr/share/wordlists/rockyou.txt.gz" ]; then
     cp /usr/share/wordlists/rockyou.txt.gz "$WORDLISTS_DIR/"
     gunzip "$WORDLISTS_DIR/rockyou.txt.gz"
     log "rockyou.txt extracted"
-  elif [ -f "/usr/share/wordlists/rockyou.txt" ]; then
-    cp /usr/share/wordlists/rockyou.txt "$WORDLISTS_DIR/"
-    log "rockyou.txt copied"
   else
-    warn "rockyou.txt not found — place it manually at $WORDLISTS_DIR/rockyou.txt"
+    # Kali wordlists package
+    apt-get install -y -qq wordlists 2>/dev/null || true
+    if [ -f "/usr/share/wordlists/rockyou.txt.gz" ]; then
+      gunzip -k /usr/share/wordlists/rockyou.txt.gz
+      cp /usr/share/wordlists/rockyou.txt "$WORDLISTS_DIR/"
+      log "rockyou.txt installed via wordlists package"
+    else
+      warn "rockyou.txt not found — place it manually at $WORDLISTS_DIR/rockyou.txt"
+    fi
   fi
 else
   info "rockyou.txt already present"
@@ -306,7 +309,7 @@ fi
 # ── Permissions ────────────────────────────────────────────────────────────────
 log "Setting permissions..."
 chmod +x "$RADIOMAN_DIR/radioman.py"
-chmod +x "$RADIOMAN_DIR/ignore_cli.py"
+chmod +x "$RADIOMAN_DIR/ignore_cli.py" 2>/dev/null || true
 chmod 755 "$CAPTURES_DIR" "$WORDLISTS_DIR"
 
 # ── systemd service ────────────────────────────────────────────────────────────
@@ -328,6 +331,20 @@ for tool in bettercap aircrack-ng hcxpcapngtool hashcat nmap iw; do
     ALL_OK=false
   fi
 done
+
+# Verify nexmon DKMS built successfully
+if dpkg -l brcmfmac-nexmon-dkms 2>/dev/null | grep -q "^ii"; then
+  DKMS_STATUS=$(dkms status brcmfmac-nexmon 2>/dev/null | head -1 || echo "")
+  if echo "$DKMS_STATUS" | grep -qi "installed\|built"; then
+    info "  [OK] brcmfmac-nexmon-dkms ($(echo "$DKMS_STATUS" | awk '{print $1}'))"
+  else
+    warn "  [CHECK] brcmfmac-nexmon-dkms installed but DKMS status unclear: $DKMS_STATUS"
+    warn "          Run: sudo bash setup/install_monitor.sh  to diagnose"
+  fi
+else
+  warn "  [MISSING] brcmfmac-nexmon-dkms — run: sudo bash setup/install_monitor.sh"
+fi
+
 $ALL_OK || warn "Some tools are missing — check warnings above."
 
 echo ""
@@ -335,17 +352,16 @@ log "━━━━━━━━━━━━━━━━━━━━━━━━━
 log " radioman installation complete!"
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-warn "REBOOT REQUIRED to activate SPI / I2C / USB gadget changes."
+warn "REBOOT REQUIRED to activate USB gadget / SPI / I2C changes."
 echo ""
 info "After reboot:"
-info "  USB SSH:    ssh pi@10.55.0.1  (set Mac USB Gadget to 10.55.0.2/255.255.0.0)"
-info "  WiFi SSH:   ssh pi@radioman.local  (while not scanning)"
-info "  Logs:       journalctl -u radioman -f"
-info "  Dashboard:  http://radioman.local:8080"
+info "  On your Mac:  bash scripts/mac_connect.sh share"
+info "  USB SSH:      ssh pi@10.55.0.1   (or kali@10.55.0.1 if using default Kali user)"
+info "  Dashboard:    http://radioman.local:8080"
+info "  Logs:         journalctl -u radioman -f"
 echo ""
 warn "NOTE: bettercap puts wlan0 into monitor mode — WiFi SSH drops during scanning."
 warn "Use the USB cable (10.55.0.1) as your primary management connection."
 echo ""
 warn "PiSugar battery: run setup/install_pisugar.sh separately if needed."
-warn "Battery reads via direct I2C automatically if pisugar-server is not installed."
 echo ""
