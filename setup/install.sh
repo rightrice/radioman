@@ -1,6 +1,6 @@
 #!/bin/bash
 # radioman install script
-# Raspberry Pi Zero 2W — Raspberry Pi OS Lite 64-bit (Bookworm)
+# Raspberry Pi Zero 2W — Kali Linux arm64
 # Run as root: sudo bash setup/install.sh
 
 set -e
@@ -83,9 +83,8 @@ fi
 
 # ── Core system dependencies ───────────────────────────────────────────────────
 log "Installing system dependencies..."
-# Note: Kali includes most security tools (aircrack-ng, nmap, hashcat, hcxtools,
-# bettercap) pre-installed. The command -v guards below will skip re-installation.
-# dphys-swapfile is not pre-installed on Kali — install it here before the swap block.
+# Kali includes most security tools pre-installed; the command -v guards in the
+# security tools section skip re-installation for anything already present.
 apt-get install -y -qq \
   python3 python3-pip python3-venv python3-dev \
   git curl wget unzip ca-certificates \
@@ -359,8 +358,8 @@ echo ""
 warn "REBOOT REQUIRED to activate USB gadget / SPI / I2C changes."
 echo ""
 info "After reboot:"
-info "  USB SSH:    ssh pi@10.55.0.1  (set Mac USB Gadget to 10.55.0.2/255.255.0.0)"
-info "  WiFi SSH:   ssh pi@radioman.local  (while not scanning)"
+info "  USB SSH:    ssh kali@10.55.0.1  (Windows: run scripts\\win_connect.ps1 as Admin)"
+info "  WiFi SSH:   ssh kali@radioman.local  (while not scanning)"
 info "  Logs:       journalctl -u radioman -f"
 info "  Dashboard:  http://radioman.local:8080"
 echo ""

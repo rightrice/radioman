@@ -31,50 +31,30 @@ Combines the spirit of Pwnagotchi, Ubiquiti WiFiman, and the Aircrack-ng suite.
 
 ### 1. Flash Kali Linux
 
-<<<<<<< Updated upstream
 Download the **Kali Linux Raspberry Pi ARM** image from [kali.org/get-kali](https://www.kali.org/get-kali/#kali-arm).
-Use the **64-bit** image for the Pi Zero 2W.
+Use the **64-bit (arm64)** image for the Pi Zero 2W.
 
-Flash to SD card with Raspberry Pi Imager or Balena Etcher.
+Flash to SD card with Raspberry Pi Imager (choose "Use custom") or Balena Etcher.
 
-> **First boot credentials:** `kali` / `kali`
-> Change the password immediately: `passwd`
-
-### 2. First boot
-
-Connect the Pi to your home WiFi or plug in the USB cable (see section 4 first).
-Then SSH in:
-=======
-Download the **Kali Linux arm64** image for the Raspberry Pi Zero 2W from [kali.org/get-kali/#kali-arm](https://www.kali.org/get-kali/#kali-arm).
-
-Flash it to SD card using Raspberry Pi Imager (choose "Use custom" and select the `.img.xz`) or Balena Etcher.
-
-Default credentials on first boot: user `kali`, password `kali`.
+> **First boot credentials:** `kali` / `kali` — change the password immediately: `passwd`
 
 ### 2. First boot
 
-SSH in over WiFi (default hostname is `kali`):
+Connect the Pi to your home WiFi, then SSH in (default hostname is `kali`):
+
 ```bash
 ssh kali@kali.local
+# or by IP if mDNS isn't working yet:
+ssh kali@<pi-ip>
 ```
 
-Change the default password immediately:
+Change the password:
 ```bash
 passwd
 ```
 
-Set the hostname to `radioman`:
-```bash
-sudo hostnamectl set-hostname radioman
-sudo sed -i 's/kali/radioman/g' /etc/hosts
-```
->>>>>>> Stashed changes
-
-```bash
-ssh kali@radioman.local
-# or by IP if mDNS isn't working yet:
-ssh kali@<pi-ip>
-```
+> `install.sh` (next step) sets the hostname to `radioman` automatically.
+> After reboot you'll use `kali@radioman.local`.
 
 ### 3. Clone and install
 
@@ -85,29 +65,22 @@ sudo bash setup/install.sh
 sudo reboot
 ```
 
-<<<<<<< Updated upstream
 `install.sh` handles:
 - Sets hostname to `radioman`
 - Swap + zram (memory management for 512MB RAM)
-- nexmon DKMS install (monitor mode — no firmware-nexmon)
+- nexmon DKMS install (monitor mode — see note below)
 - Security tools verification (Kali pre-installs most)
 - SPI, I2C, USB gadget ethernet
 - Python venv, Waveshare library, radioman service
 
-> **Note:** `brcmfmac-nexmon-dkms` patches the brcmfmac kernel driver to allow
+> **nexmon note:** `brcmfmac-nexmon-dkms` patches the brcmfmac kernel driver to allow
 > monitor mode with the stock Cypress firmware. `firmware-nexmon` is explicitly
 > **not** installed — it replaces Cypress firmware files and crashes the
 > BCM43430A1 (chip revision mismatch).
 
 ### 4. USB gadget ethernet (recommended)
 
-After reboot, connect the Pi to your Mac via USB **data** cable (not the PWR port) and run on your Mac:
-=======
-`install.sh` configures swap, zram, SPI, I2C, USB gadget ethernet, bettercap, aircrack-ng, hcxtools, hashcat, and the radioman systemd service. Tools already present on Kali are detected and skipped.
-
-### 4. USB gadget ethernet (recommended)
-
-Connect the Pi to your machine via USB **data** cable (not the PWR port after reboot), then run the connect script for your OS.
+Connect the Pi to your machine via USB **data** cable (not the PWR port), then run the connect script for your OS.
 
 #### Windows 11
 
@@ -125,7 +98,7 @@ ssh kali@10.55.0.1
 
 **If the USB adapter shows `169.254.x.x` (self-assigned):**
 
-Windows tried DHCP and got a link-local address. The script handles this automatically by assigning `10.55.0.2` statically. If you need to do it manually:
+Windows tried DHCP and got a link-local address. The script handles this automatically. If you need to do it manually:
 
 1. Open **Settings → Network & Internet → Advanced network settings**
 2. Find the adapter labelled **Remote NDIS Compatible Device** (or similar)
@@ -154,7 +127,7 @@ sudo nmcli connection modify usb-gadget ipv4.method auto
 sudo nmcli connection up usb-gadget
 ```
 
-The Pi will get a `192.168.137.x` address from Windows. SSH at `10.55.0.1` continues to work (static IP from `install.sh` is restored by the script). To return to static-only mode:
+The Pi will get a `192.168.137.x` address from Windows ICS. SSH at `10.55.0.1` continues to work (static IP is preserved by the script). To return to static-only mode:
 
 ```bash
 sudo nmcli connection modify usb-gadget ipv4.method manual ipv4.addresses 10.55.0.1/24
@@ -166,7 +139,6 @@ sudo nmcli connection up usb-gadget
 ---
 
 #### macOS
->>>>>>> Stashed changes
 
 ```bash
 bash scripts/mac_connect.sh
@@ -188,7 +160,6 @@ macOS tried DHCP and got a link-local address. Fix it manually:
 3. Click **Details → TCP/IP**
 4. Set Configure IPv4: **Manually**, IP: `10.55.0.2`, Mask: `255.255.255.0`
 
-<<<<<<< Updated upstream
 This happens because macOS tries DHCP and the Pi doesn't run a DHCP server on `usb0`. The setting persists across reboots once saved.
 
 **If the USB gadget disappears after every reboot:**
@@ -200,21 +171,13 @@ echo "options g_ether host_addr=72:48:4f:52:4d:01 dev_addr=72:48:4f:52:4d:02" | 
 sudo rmmod g_ether && sudo modprobe g_ether
 ```
 
-### 5. Internet sharing (Pi needs internet for git pull, apt, etc.)
-
-Run on your Mac each time you need the Pi to have internet access:
-=======
 **Internet sharing — macOS:**
->>>>>>> Stashed changes
 
 ```bash
 bash scripts/mac_connect.sh share
 ```
 
-This enables NAT via pfctl so the Pi routes through your Mac's WiFi. **The rule does not survive Mac sleep or reboot** — re-run it whenever you lose Pi internet.
-
-<<<<<<< Updated upstream
-`install.sh` already configures the usb-gadget NM profile with gateway `10.55.0.2` and DNS `1.1.1.1` — no extra Pi-side steps needed.
+This enables NAT via pfctl so the Pi routes through your Mac's WiFi. `install.sh` already configures the `usb-gadget` NM profile with gateway `10.55.0.2` and DNS `1.1.1.1` — no extra Pi-side steps needed.
 
 **Verify:**
 ```bash
@@ -223,20 +186,9 @@ ping -c 2 1.1.1.1       # IP routing works
 ping -c 2 github.com    # DNS works
 ```
 
-### 6. Configure
-=======
-One-time Pi-side setup (do this once after `install.sh`):
-
-```bash
-sudo nmcli connection modify usb-gadget \
-  ipv4.gateway 10.55.0.2 \
-  ipv4.never-default no \
-  ipv4.dns "1.1.1.1 8.8.8.8"
-sudo nmcli connection up usb-gadget
-```
+**The rule does not survive Mac sleep or reboot** — re-run `mac_connect.sh share` each time.
 
 ### 5. Configure
->>>>>>> Stashed changes
 
 Edit `/opt/radioman/radioman.conf`:
 
@@ -263,37 +215,26 @@ rssi_history_hours = 24
 device_token =         # set after pairing in dashboard
 ```
 
-### 7. Monitor mode
+### 6. Monitor mode
 
 Monitor mode is enabled by the `brcmfmac-nexmon-dkms` package installed in step 3.
 It creates a virtual `mon0` interface alongside `wlan0` so WiFi connectivity is
 maintained while scanning.
 
-<<<<<<< Updated upstream
-If you need to verify or repair monitor mode manually:
-=======
-Kali's Pi Zero 2W image ships standard Raspberry Pi firmware. VDEV monitor mode works the same way as on Pi OS.
-
-If you have nexmon packages installed and monitor mode is failing (packages `brcmfmac-nexmon-dkms` or `firmware-nexmon`), clean up with:
->>>>>>> Stashed changes
+If you need to verify or repair monitor mode:
 
 ```bash
 sudo bash setup/install_monitor.sh
 ```
 
-This installs the DKMS package if missing, reloads the driver, and tests that
-`mon0` can be created. Safe to run multiple times.
+This installs the DKMS package if missing, reloads the driver, and tests that `mon0` can be created. Safe to run multiple times.
 
-<<<<<<< Updated upstream
 > **Important:** `wlan0` disconnects from WiFi while bettercap is scanning on `mon0`.
-> Use the USB cable (10.55.0.1) as your primary management connection.
-=======
-> **Kali tool note:** aircrack-ng, hcxtools, hashcat, bettercap, and nmap are typically pre-installed in Kali. `install.sh` detects existing installations and skips re-installing them.
+> Use the USB cable (`10.55.0.1`) as your primary management connection.
 
 ---
->>>>>>> Stashed changes
 
-### 8. Install AI (optional)
+### 7. Install AI (optional)
 
 The AI assistant requires a pre-built `llama-cli` binary and the Granite model.
 
@@ -360,12 +301,8 @@ radioman/
 │   ├── db.py                   # SQLite database
 │   └── xplt.py                 # XPLT cloud sync
 ├── scripts/
-<<<<<<< Updated upstream
-│   ├── mac_connect.sh          # Mac-side USB gadget + internet sharing setup
-=======
 │   ├── win_connect.ps1         # Windows 11 USB gadget setup (PowerShell, run as Admin)
-│   ├── mac_connect.sh          # macOS USB gadget setup
->>>>>>> Stashed changes
+│   ├── mac_connect.sh          # macOS USB gadget + internet sharing setup
 │   └── build_llama_wsl.sh      # Cross-compile llama-cli (WSL2)
 ├── setup/
 │   ├── install.sh              # Full install script (Kali Linux)
