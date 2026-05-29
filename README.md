@@ -188,6 +188,51 @@ ping -c 2 github.com    # DNS works
 
 **The rule does not survive Mac sleep or reboot** — re-run `mac_connect.sh share` each time.
 
+---
+
+#### Ubuntu / Linux
+
+```bash
+bash scripts/linux_connect.sh
+```
+
+This detects the CDC ECM USB gadget adapter, assigns `10.55.0.2` via NetworkManager (or falls back to raw `ip` commands), and verifies the Pi is reachable at `10.55.0.1`.
+
+SSH over USB:
+```bash
+ssh kali@10.55.0.1
+```
+
+**If the USB interface doesn't show up:**
+
+Check that the `cdc_ether` driver is loaded:
+```bash
+lsmod | grep cdc_ether
+# If missing:
+sudo modprobe cdc_ether
+```
+
+Then check `ip link show` or `nmcli device status` for a new ethernet interface after plugging in.
+
+**Internet sharing — Linux:**
+
+```bash
+bash scripts/linux_connect.sh share
+```
+
+This enables iptables NAT so the Pi routes internet traffic through your upstream interface. Unlike Windows ICS, the adapter IP is not changed — the Pi stays reachable at `10.55.0.1` in both modes. No Pi-side changes needed (`install.sh` already configured the gateway).
+
+**Verify on Pi:**
+```bash
+ping -c 2 1.1.1.1     # IP routing works
+ping -c 2 github.com  # DNS works
+```
+
+**Rules are session-only** — re-run `linux_connect.sh share` after reboot. To stop:
+```bash
+sudo iptables -t nat -F POSTROUTING && sudo iptables -F FORWARD
+```
+
 ### 5. Configure
 
 Edit `/opt/radioman/radioman.conf`:
@@ -303,6 +348,7 @@ radioman/
 ├── scripts/
 │   ├── win_connect.ps1         # Windows 11 USB gadget setup (PowerShell, run as Admin)
 │   ├── mac_connect.sh          # macOS USB gadget + internet sharing setup
+│   ├── linux_connect.sh        # Ubuntu/Linux USB gadget setup (iptables NAT sharing)
 │   └── build_llama_wsl.sh      # Cross-compile llama-cli (WSL2)
 ├── setup/
 │   ├── install.sh              # Full install script (Kali Linux)
