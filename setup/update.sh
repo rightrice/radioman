@@ -273,6 +273,6 @@ if $REBOOT_NEEDED; then
   warn "REBOOT REQUIRED — boot config changed (USB gadget / SPI / I2C)."
   warn "Run: sudo reboot"
   warn "After reboot, set your Mac USB interface to 10.55.0.2 / 255.255.255.0"
-  warn "then SSH: ssh pi@10.55.0.1"
+  warn "then SSH: ssh kali@10.55.0.1"
 fi
 echo ""

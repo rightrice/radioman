@@ -130,8 +130,8 @@ fi
 # ── Transfer to Zero 2W ───────────────────────────────────────────────────────
 echo ""
 if [ -n "$ZERO_ADDR" ]; then
-  log "Transferring binary to pi@${ZERO_ADDR}:/tmp/llama-cli ..."
-  scp "$LLAMA_BIN" "pi@${ZERO_ADDR}:/tmp/llama-cli"
+  log "Transferring binary to kali@${ZERO_ADDR}:/tmp/llama-cli ..."
+  scp "$LLAMA_BIN" "kali@${ZERO_ADDR}:/tmp/llama-cli"
   log "Transfer complete."
   echo ""
   info "On the Zero 2W, run:"
@@ -142,8 +142,8 @@ if [ -n "$ZERO_ADDR" ]; then
 else
   echo ""
   warn "No Zero 2W address given — copy manually:"
-  warn "  scp $LLAMA_BIN pi@<zero_ip>:/tmp/llama-cli"
-  warn "  ssh pi@<zero_ip> 'sudo mv /tmp/llama-cli /opt/radioman/llama/llama-cli && sudo chmod +x /opt/radioman/llama/llama-cli'"
+  warn "  scp $LLAMA_BIN kali@<zero_ip>:/tmp/llama-cli"
+  warn "  ssh kali@<zero_ip> 'sudo mv /tmp/llama-cli /opt/radioman/llama/llama-cli && sudo chmod +x /opt/radioman/llama/llama-cli'"
 fi
 
 echo ""

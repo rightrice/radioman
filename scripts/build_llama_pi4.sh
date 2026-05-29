@@ -99,17 +99,17 @@ fi
 # ── Transfer to Zero 2W ───────────────────────────────────────────────────────
 echo ""
 if [ -n "$ZERO_IP" ]; then
-  log "Transferring to pi@${ZERO_IP}:/opt/radioman/llama/llama-cli ..."
-  ssh "pi@${ZERO_IP}" "mkdir -p /opt/radioman/llama"
-  scp "$LLAMA_BIN" "pi@${ZERO_IP}:/opt/radioman/llama/llama-cli"
-  ssh "pi@${ZERO_IP}" "chmod +x /opt/radioman/llama/llama-cli"
+  log "Transferring to kali@${ZERO_IP}:/opt/radioman/llama/llama-cli ..."
+  ssh "kali@${ZERO_IP}" "mkdir -p /opt/radioman/llama"
+  scp "$LLAMA_BIN" "kali@${ZERO_IP}:/opt/radioman/llama/llama-cli"
+  ssh "kali@${ZERO_IP}" "chmod +x /opt/radioman/llama/llama-cli"
   log "Transfer complete."
   echo ""
   info "On the Zero 2W, run:"
   info "  sudo systemctl restart radioman"
 else
   warn "No Zero IP given — copy manually:"
-  warn "  scp $LLAMA_BIN pi@<zero_ip>:/opt/radioman/llama/llama-cli"
+  warn "  scp $LLAMA_BIN kali@<zero_ip>:/opt/radioman/llama/llama-cli"
 fi
 
 echo ""

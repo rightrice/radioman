@@ -1,6 +1,6 @@
 #!/bin/bash
 # radioman install script
-# Kali Linux ARM — Raspberry Pi Zero 2W
+# Raspberry Pi Zero 2W — Raspberry Pi OS Lite 64-bit (Bookworm)
 # Run as root: sudo bash setup/install.sh
 
 set -e
@@ -83,11 +83,15 @@ fi
 
 # ── Core system dependencies ───────────────────────────────────────────────────
 log "Installing system dependencies..."
+# Note: Kali includes most security tools (aircrack-ng, nmap, hashcat, hcxtools,
+# bettercap) pre-installed. The command -v guards below will skip re-installation.
+# dphys-swapfile is not pre-installed on Kali — install it here before the swap block.
 apt-get install -y -qq \
   python3 python3-pip python3-venv python3-dev \
   git curl wget unzip ca-certificates \
   sqlite3 \
   iw wireless-tools rfkill \
+  dphys-swapfile \
   i2c-tools \
   libssl-dev libffi-dev \
   libpcap-dev libpcap0.8 \
@@ -355,10 +359,10 @@ echo ""
 warn "REBOOT REQUIRED to activate USB gadget / SPI / I2C changes."
 echo ""
 info "After reboot:"
-info "  On your Mac:  bash scripts/mac_connect.sh share"
-info "  USB SSH:      ssh pi@10.55.0.1   (or kali@10.55.0.1 if using default Kali user)"
-info "  Dashboard:    http://radioman.local:8080"
-info "  Logs:         journalctl -u radioman -f"
+info "  USB SSH:    ssh pi@10.55.0.1  (set Mac USB Gadget to 10.55.0.2/255.255.0.0)"
+info "  WiFi SSH:   ssh pi@radioman.local  (while not scanning)"
+info "  Logs:       journalctl -u radioman -f"
+info "  Dashboard:  http://radioman.local:8080"
 echo ""
 warn "NOTE: bettercap puts wlan0 into monitor mode — WiFi SSH drops during scanning."
 warn "Use the USB cable (10.55.0.1) as your primary management connection."
