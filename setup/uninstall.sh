@@ -80,12 +80,13 @@ if $FULL; then
 
   # Revert boot config changes
   log "Reverting boot config..."
+  # /boot/firmware/config.txt = Ubuntu/Pi; /boot/config.txt = Kali/Pi OS
   CONFIG_FILE="/boot/firmware/config.txt"
-  [ -f "/boot/config.txt" ] && CONFIG_FILE="/boot/config.txt"
+  [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/boot/config.txt"
   CMDLINE_FILE="/boot/firmware/cmdline.txt"
-  [ -f "/boot/cmdline.txt" ] && CMDLINE_FILE="/boot/cmdline.txt"
+  [ ! -f "$CMDLINE_FILE" ] && CMDLINE_FILE="/boot/cmdline.txt"
 
-  if ! mountpoint -q /boot/firmware 2>/dev/null; then
+  if [ -d /boot/firmware ] && ! mountpoint -q /boot/firmware 2>/dev/null; then
     mount /boot/firmware 2>/dev/null || warn "Could not mount /boot/firmware — boot config not reverted"
   fi
 

@@ -121,13 +121,14 @@ echo ""
 # ── Boot config (dwc2 gadget mode + g_ether) ──────────────────────────────────
 log "Boot config..."
 
+# /boot/firmware/config.txt = Ubuntu/Pi; /boot/config.txt = Kali/Pi OS
 CONFIG_FILE="/boot/firmware/config.txt"
 [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="/boot/config.txt"
 CMDLINE_FILE="/boot/firmware/cmdline.txt"
 [ ! -f "$CMDLINE_FILE" ] && CMDLINE_FILE="/boot/cmdline.txt"
 
 # Ensure boot partition is mounted
-if ! mountpoint -q /boot/firmware 2>/dev/null; then
+if [ -d /boot/firmware ] && ! mountpoint -q /boot/firmware 2>/dev/null; then
   mount /boot/firmware 2>/dev/null || true
 fi
 
@@ -212,11 +213,20 @@ echo ""
 
 # ── Waveshare library (re-sync if e-Paper repo is present) ────────────────────
 log "Waveshare library..."
-WAVESHARE_SRC="/opt/waveshare-epd/RaspberryPi_JetsonNano/python/lib/waveshare_epd"
 PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 SITE_PKG="$RADIOMAN_DIR/venv/lib/python${PY_VER}/site-packages"
 
-if [ -d "$WAVESHARE_SRC" ]; then
+WAVESHARE_SRC=""
+for candidate in \
+    "/opt/waveshare-epd/RaspberryPi_JetsonNano/python/lib/waveshare_epd" \
+    "/opt/waveshare-epd/raspberrypi/python/lib/waveshare_epd" \
+    "/opt/waveshare-epd/python/lib/waveshare_epd"; do
+  [ -d "$candidate" ] && WAVESHARE_SRC="$candidate" && break
+done
+[ -z "$WAVESHARE_SRC" ] && [ -d "/opt/waveshare-epd" ] && \
+  WAVESHARE_SRC=$(find /opt/waveshare-epd -type d -name "waveshare_epd" 2>/dev/null | head -1)
+
+if [ -n "$WAVESHARE_SRC" ] && [ -d "$WAVESHARE_SRC" ]; then
   update_dir "$WAVESHARE_SRC" "$SITE_PKG/waveshare_epd" "waveshare_epd (venv)"
 else
   same "waveshare_epd (source not found — skipping)"

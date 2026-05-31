@@ -3,6 +3,8 @@
 A tamagotchi-style Wi-Fi audit console for the Raspberry Pi Zero 2W.
 Combines the spirit of Pwnagotchi, Ubiquiti WiFiman, and the Aircrack-ng suite.
 
+> **Recommended OS:** Ubuntu Server 24.04 LTS (arm64). Kali Linux is also supported but has stability issues on the Pi Zero 2W's 512MB RAM.
+
 ## Hardware
 
 | Component | Details |
@@ -29,32 +31,27 @@ Combines the spirit of Pwnagotchi, Ubiquiti WiFiman, and the Aircrack-ng suite.
 
 ## Install
 
-### 1. Flash Kali Linux
+### 1. Flash Ubuntu Server 24.04 LTS
 
-Download the **Kali Linux Raspberry Pi ARM** image from [kali.org/get-kali](https://www.kali.org/get-kali/#kali-arm).
-Use the **64-bit (arm64)** image for the Pi Zero 2W.
+Download the **Ubuntu Server 24.04 LTS Raspberry Pi** image from [ubuntu.com/download/raspberry-pi](https://ubuntu.com/download/raspberry-pi).
+Use the **64-bit (arm64)** image.
 
 Flash to SD card with Raspberry Pi Imager (choose "Use custom") or Balena Etcher.
 
-> **First boot credentials:** `kali` / `kali` — change the password immediately: `passwd`
+> **First boot credentials:** `ubuntu` / `ubuntu` — you'll be forced to change the password on first login.
 
 ### 2. First boot
 
-Connect the Pi to your home WiFi, then SSH in (default hostname is `kali`):
+Connect the Pi to your home WiFi, then SSH in (default hostname is `ubuntu`):
 
 ```bash
-ssh kali@kali.local
+ssh ubuntu@ubuntu.local
 # or by IP if mDNS isn't working yet:
-ssh kali@<pi-ip>
-```
-
-Change the password:
-```bash
-passwd
+ssh ubuntu@<pi-ip>
 ```
 
 > `install.sh` (next step) sets the hostname to `radioman` automatically.
-> After reboot you'll use `kali@radioman.local`.
+> After reboot you'll use `ubuntu@radioman.local`.
 
 ### 3. Clone and install
 
@@ -320,8 +317,8 @@ Updates daemon files, web assets, caplet, and service. Never touches `radioman.c
 | Interface | Address |
 |---|---|
 | Web dashboard | `http://radioman.local:8080` |
-| USB SSH | `ssh kali@10.55.0.1` |
-| WiFi SSH | `ssh kali@radioman.local` (only when not scanning) |
+| USB SSH | `ssh ubuntu@10.55.0.1` |
+| WiFi SSH | `ssh ubuntu@radioman.local` (only when not scanning) |
 | Logs | `journalctl -u radioman -f` |
 | Captures | `/opt/radioman/captures/` |
 
@@ -401,4 +398,4 @@ The authors are not responsible for misuse.
 
 ---
 
-*Built with bettercap, aircrack-ng, llama.cpp, Flask, and the aspect2020 design system.*
+*Built with bettercap, aircrack-ng, llama.cpp, Flask, and the radioman design system.*

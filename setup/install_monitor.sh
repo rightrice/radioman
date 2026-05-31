@@ -1,17 +1,17 @@
 #!/bin/bash
-# install_monitor.sh — install and verify Wi-Fi monitor mode on Raspberry Pi Zero 2W
+# install_monitor.sh — Wi-Fi monitor mode for Pi Zero 2W (BCM43430A1)
 #
-# On Kali Linux, monitor mode is enabled via the brcmfmac-nexmon-dkms package.
-# This patches the brcmfmac kernel driver to allow monitor mode with the stock
-# Cypress firmware — no firmware replacement is needed or wanted.
+# Kali Linux:    installs brcmfmac-nexmon-dkms from the Kali repo (pre-built)
+# Ubuntu Server: builds the nexmon brcmfmac driver patch from source
 #
-# CRITICAL: Do NOT install firmware-nexmon. It replaces Cypress firmware files
-# and crashes the BCM43430A1 (Pi Zero 2W) due to chip revision mismatch.
+# CRITICAL: firmware-nexmon is NEVER installed — it replaces Cypress firmware
+# and crashes the BCM43430A1 (chip revision mismatch). Only the kernel driver
+# is patched; the stock Cypress firmware stays untouched.
 #
 # Usage:
 #   sudo bash setup/install_monitor.sh
 #
-# Safe to run multiple times. Also repairs a broken nexmon DKMS install.
+# Safe to run multiple times. Also repairs a broken nexmon install.
 
 set -e
 
@@ -30,72 +30,189 @@ info() { echo -e "${BLUE}[info]${NC} $1"; }
 
 IFACE="${1:-wlan0}"
 MON_IFACE="mon0"
+NEXMON_SRC="/opt/nexmon-src"
+BCM_CHIP="bcm43430a1"
+BCM_FW_VER="7_45_41_46"
 
-# ── Block firmware-nexmon ─────────────────────────────────────────────────────
-# Hold the package so it can't be pulled in accidentally by apt
+# ── Detect OS ─────────────────────────────────────────────────────────────────
+OS_ID=$(grep "^ID=" /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "unknown")
+OS_LIKE=$(grep "^ID_LIKE=" /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")
+
+echo ""
+log "OS detected: $OS_ID"
+
+# ── Block firmware-nexmon (always — crashes BCM43430A1) ───────────────────────
 apt-mark hold firmware-nexmon 2>/dev/null || true
 
-# If firmware-nexmon is already installed, remove it and restore original firmware
 if dpkg -l firmware-nexmon 2>/dev/null | grep -q "^ii"; then
   warn "firmware-nexmon is installed — removing it (crashes BCM43430A1)"
   apt-mark unhold firmware-nexmon 2>/dev/null || true
   apt-get remove -y firmware-nexmon 2>/dev/null || true
   apt-mark hold firmware-nexmon 2>/dev/null || true
-
-  # Restore original Cypress firmware
   log "Restoring stock Cypress firmware..."
   apt-get install -y --reinstall firmware-brcm80211 2>/dev/null && \
     log "firmware-brcm80211 reinstalled" || \
-    warn "Could not reinstall firmware-brcm80211 — check dmesg for ENOENT firmware errors"
+    warn "Could not reinstall firmware-brcm80211 — check dmesg for firmware errors"
 fi
 
-# ── Ensure linux-headers are installed ────────────────────────────────────────
+# ── Kernel headers ────────────────────────────────────────────────────────────
 KERNEL=$(uname -r)
 log "Kernel: $KERNEL"
 
 if ! dpkg -l "linux-headers-${KERNEL}" 2>/dev/null | grep -q "^ii"; then
-  log "Installing linux-headers-${KERNEL}..."
+  log "Installing kernel headers for $KERNEL..."
   apt-get install -y "linux-headers-${KERNEL}" 2>/dev/null || \
-    apt-get install -y linux-headers-$(uname -r | sed 's/+.*//')-rpi-v8 2>/dev/null || \
+    apt-get install -y "linux-raspi-headers-${KERNEL%%-*}" 2>/dev/null || \
+    apt-get install -y linux-headers-generic 2>/dev/null || \
     warn "Could not install kernel headers — DKMS build may fail"
 fi
 
-# ── Install brcmfmac-nexmon-dkms ──────────────────────────────────────────────
-if dpkg -l brcmfmac-nexmon-dkms 2>/dev/null | grep -q "^ii"; then
-  log "brcmfmac-nexmon-dkms already installed"
-  DKMS_STATUS=$(dkms status brcmfmac-nexmon 2>/dev/null | head -1 || echo "")
-  if echo "$DKMS_STATUS" | grep -qi "installed\|built"; then
-    info "DKMS module status: $DKMS_STATUS"
-  else
-    warn "DKMS module not built — rebuilding for kernel $KERNEL..."
-    NEXMON_VER=$(dkms status brcmfmac-nexmon 2>/dev/null | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | head -1 || echo "")
-    if [ -n "$NEXMON_VER" ]; then
-      dkms build -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" 2>/dev/null && \
-      dkms install -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" 2>/dev/null && \
-        log "DKMS module rebuilt and installed" || \
-        warn "DKMS rebuild failed — check: dkms status && dmesg | grep nexmon"
+# ══════════════════════════════════════════════════════════════════════════════
+#  KALI PATH — pre-built package from Kali repo
+# ══════════════════════════════════════════════════════════════════════════════
+if [ "$OS_ID" = "kali" ]; then
+  log "Kali detected — using brcmfmac-nexmon-dkms package"
+
+  if dpkg -l brcmfmac-nexmon-dkms 2>/dev/null | grep -q "^ii"; then
+    log "brcmfmac-nexmon-dkms already installed"
+    DKMS_STATUS=$(dkms status brcmfmac-nexmon 2>/dev/null | head -1 || echo "")
+    if echo "$DKMS_STATUS" | grep -qi "installed\|built"; then
+      info "DKMS module status: $DKMS_STATUS"
+    else
+      warn "DKMS module not built — rebuilding for kernel $KERNEL..."
+      NEXMON_VER=$(dkms status brcmfmac-nexmon 2>/dev/null \
+        | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | head -1 || echo "")
+      if [ -n "$NEXMON_VER" ]; then
+        dkms build   -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" 2>/dev/null && \
+        dkms install -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" 2>/dev/null && \
+          log "DKMS module rebuilt" || \
+          warn "DKMS rebuild failed — check: dkms status && dmesg | grep nexmon"
+      fi
     fi
-  fi
-else
-  log "Installing brcmfmac-nexmon-dkms..."
-  apt-get update -qq
-  if apt-get install -y brcmfmac-nexmon-dkms 2>/dev/null; then
+  else
+    log "Installing brcmfmac-nexmon-dkms..."
+    apt-get update -qq
+    apt-get install -y brcmfmac-nexmon-dkms || \
+      err "brcmfmac-nexmon-dkms install failed — run: apt-get update && apt-get install brcmfmac-nexmon-dkms"
     log "brcmfmac-nexmon-dkms installed"
+  fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  UBUNTU PATH — build nexmon brcmfmac driver from source
+# ══════════════════════════════════════════════════════════════════════════════
+else
+  log "Ubuntu/Debian detected — building nexmon brcmfmac driver from source"
+  echo ""
+  info "This takes ~10-15 minutes on a Pi Zero 2W. Go make a coffee."
+  echo ""
+
+  # ── Build dependencies ──────────────────────────────────────────────────────
+  log "Installing build dependencies..."
+  apt-get install -y \
+    git libgmp3-dev gawk qpdf flex bison libfl-dev \
+    build-essential cmake automake autoconf libtool texinfo \
+    python3 dkms bc 2>/dev/null || \
+    warn "Some build deps may be missing — continuing anyway"
+
+  # ── Clone nexmon ────────────────────────────────────────────────────────────
+  if [ -d "$NEXMON_SRC/.git" ]; then
+    log "Updating existing nexmon source..."
+    git -C "$NEXMON_SRC" pull --depth=1 -q 2>/dev/null || \
+      warn "Could not update nexmon source — using existing checkout"
   else
-    # Try adding Kali contrib explicitly
-    warn "Package not found — checking sources..."
-    SOURCES=$(cat /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true)
-    if ! echo "$SOURCES" | grep -q "kali"; then
-      warn "No Kali repository detected. This script is designed for Kali Linux."
-      warn "If you're on Kali, try: apt-get install -y brcmfmac-nexmon-dkms"
-      warn "If the package still isn't found, run: apt-get update && apt-cache search nexmon"
-      err "brcmfmac-nexmon-dkms not available. Cannot enable monitor mode."
+    log "Cloning nexmon..."
+    rm -rf "$NEXMON_SRC"
+    git clone --depth=1 -q https://github.com/seemoo-lab/nexmon.git "$NEXMON_SRC"
+  fi
+
+  NEXMON_TAG=$(git -C "$NEXMON_SRC" describe --tags --always 2>/dev/null || echo "unknown")
+  info "nexmon version: $NEXMON_TAG"
+
+  # ── Verify BCM43430A1 patch is present ─────────────────────────────────────
+  PATCH_DIR="$NEXMON_SRC/patches/$BCM_CHIP/$BCM_FW_VER/nexmon"
+  [ -d "$PATCH_DIR" ] || err "BCM43430A1 patch not found at $PATCH_DIR — check nexmon repo"
+
+  # ── Build nexmon base tools ─────────────────────────────────────────────────
+  log "Building nexmon base tools..."
+  set +e
+  (
+    cd "$NEXMON_SRC"
+    # setup_env.sh exports NEXMON_ROOT, ARM toolchain paths, etc.
+    # shellcheck disable=SC1091
+    source setup_env.sh 2>/dev/null
+    make -C buildtools 2>/dev/null
+  )
+  set -e
+
+  # ── Build BCM43430A1 driver patch ───────────────────────────────────────────
+  log "Building BCM43430A1 ($BCM_FW_VER) driver patch..."
+  BUILD_LOG="/tmp/nexmon_build.log"
+  set +e
+  (
+    cd "$NEXMON_SRC"
+    source setup_env.sh 2>/dev/null
+    cd "$PATCH_DIR"
+    make 2>&1 | tee "$BUILD_LOG" | tail -5
+  )
+  BUILD_EXIT=$?
+  set -e
+
+  if [ $BUILD_EXIT -ne 0 ]; then
+    warn "Patch build returned non-zero — checking for brcmfmac output anyway"
+    tail -20 "$BUILD_LOG" || true
+  fi
+
+  # ── Register patched brcmfmac driver as a DKMS module ──────────────────────
+  # Find the patched brcmfmac source directory built by nexmon
+  BRCMFMAC_SRC=$(find "$PATCH_DIR" -maxdepth 2 -type d -name "brcmfmac*nexmon*" 2>/dev/null | head -1)
+  [ -z "$BRCMFMAC_SRC" ] && \
+    BRCMFMAC_SRC=$(find "$NEXMON_SRC" -maxdepth 5 -type d -name "brcmfmac*nexmon*" 2>/dev/null | head -1)
+
+  if [ -z "$BRCMFMAC_SRC" ] || [ ! -d "$BRCMFMAC_SRC" ]; then
+    warn "Could not locate patched brcmfmac source directory."
+    warn "The nexmon build may have succeeded but produced output in an unexpected path."
+    warn "Check: find $NEXMON_SRC -name 'brcmfmac*.ko' 2>/dev/null"
+    warn "And: ls $PATCH_DIR"
+    warn ""
+    warn "If a .ko file was built, copy it manually:"
+    warn "  cp <path-to-brcmfmac.ko> /lib/modules/$KERNEL/kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/"
+    warn "  depmod -a && modprobe brcmfmac"
+  else
+    info "Patched brcmfmac source: $BRCMFMAC_SRC"
+    NEXMON_VER=$(echo "$NEXMON_TAG" | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | head -1 || echo "1.0.0")
+
+    # Remove any previous DKMS registration
+    dkms remove brcmfmac-nexmon/"$NEXMON_VER" --all 2>/dev/null || true
+
+    # Install DKMS module source
+    DKMS_DIR="/usr/src/brcmfmac-nexmon-${NEXMON_VER}"
+    rm -rf "$DKMS_DIR"
+    cp -r "$BRCMFMAC_SRC" "$DKMS_DIR"
+
+    # Write dkms.conf if not present
+    if [ ! -f "$DKMS_DIR/dkms.conf" ]; then
+      cat > "$DKMS_DIR/dkms.conf" <<EOF
+PACKAGE_NAME="brcmfmac-nexmon"
+PACKAGE_VERSION="$NEXMON_VER"
+BUILT_MODULE_NAME[0]="brcmfmac"
+DEST_MODULE_LOCATION[0]="/kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac"
+AUTOINSTALL="yes"
+EOF
     fi
-    err "brcmfmac-nexmon-dkms install failed — run: apt-get update && apt-get install brcmfmac-nexmon-dkms"
+
+    log "Registering brcmfmac-nexmon-$NEXMON_VER with DKMS..."
+    dkms add     -m brcmfmac-nexmon -v "$NEXMON_VER" 2>/dev/null || true
+    dkms build   -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" && \
+    dkms install -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" --force && \
+      log "brcmfmac-nexmon DKMS module installed" || \
+      warn "DKMS install failed — check: dkms status && cat /var/lib/dkms/brcmfmac-nexmon/$NEXMON_VER/build/make.log"
   fi
 fi
 
-# ── Reload brcmfmac with nexmon-patched module ────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  COMMON — reload driver and verify monitor mode
+# ══════════════════════════════════════════════════════════════════════════════
+
 log "Reloading brcmfmac driver..."
 ip link set "$MON_IFACE" down 2>/dev/null || true
 iw dev "$MON_IFACE" del 2>/dev/null || true
@@ -104,7 +221,6 @@ sleep 3
 modprobe brcmfmac 2>/dev/null || true
 sleep 4
 
-# ── Verify wlan0 is back ──────────────────────────────────────────────────────
 if ! ip link show "$IFACE" &>/dev/null; then
   err "$IFACE not found after driver reload — check: dmesg | grep -i brcm"
 fi
@@ -113,7 +229,6 @@ info "$IFACE is present"
 # ── Test monitor mode ─────────────────────────────────────────────────────────
 log "Testing monitor mode..."
 
-# Test 1: VDEV interface (preferred — keeps wlan0 in managed mode)
 iw dev "$MON_IFACE" del 2>/dev/null || true
 PHY=$(iw dev "$IFACE" info 2>/dev/null | awk '/wiphy/{print "phy"$NF}')
 [ -z "$PHY" ] && PHY="phy0"
@@ -127,19 +242,10 @@ if iw phy "$PHY" interface add "$MON_IFACE" type monitor 2>/dev/null; then
   fi
 fi
 
-# Test 2: airmon-ng check
 if command -v airmon-ng &>/dev/null; then
   AIRMON_OUT=$(airmon-ng 2>/dev/null | grep "$IFACE" || echo "")
-  if echo "$AIRMON_OUT" | grep -q "monitor"; then
+  echo "$AIRMON_OUT" | grep -q "monitor" && \
     info "airmon-ng reports $IFACE supports monitor mode"
-  fi
-fi
-
-if $VDEV_OK; then
-  log "Monitor mode: WORKING"
-else
-  warn "VDEV monitor mode test failed — check: dmesg | grep -i 'brcm\|monitor'"
-  warn "If the kernel just changed, a reboot may be required."
 fi
 
 echo ""
@@ -147,10 +253,18 @@ log "━━━━━━━━━━━━━━━━━━━━━━━━━
 log " Monitor mode setup complete"
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-info "radioman creates mon0 automatically when scanning starts."
-info "No manual interface setup needed — just start a scan from the dashboard."
+info "OS:     $OS_ID"
+info "Kernel: $KERNEL"
+info "Chip:   BCM43430A1 ($BCM_FW_VER)"
+info "Iface:  $IFACE → $MON_IFACE (created automatically when scanning starts)"
 echo ""
-if ! $VDEV_OK; then
-  warn "Monitor mode test failed. Try rebooting: sudo reboot"
-  warn "Then re-run this script to verify."
+
+if $VDEV_OK; then
+  log "Monitor mode: WORKING"
+else
+  warn "Monitor mode test failed."
+  warn "If the kernel just changed, try: sudo reboot"
+  warn "Then re-run: sudo bash setup/install_monitor.sh"
+  warn "For manual diagnosis: dmesg | grep -i 'brcm\|monitor\|nexmon'"
 fi
+echo ""

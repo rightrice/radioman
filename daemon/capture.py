@@ -125,8 +125,8 @@ class CaptureEngine:
                                 self._iface, result.stderr.strip() or result.stdout.strip())
             except Exception as e:
                 log.warning("nmcli connect: %s", e)
-        elif shutil.which("wpa_cli"):
-            # Fallback for systems using wpa_supplicant directly (no NM)
+        elif shutil.which("wpa_cli") and not shutil.which("nmcli"):
+            # Only use wpa_cli when NM is absent — on Kali NM owns the interface
             try:
                 subprocess.run(
                     ["wpa_cli", "-i", self._iface, "reassociate"],
