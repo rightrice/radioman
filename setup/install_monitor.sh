@@ -345,6 +345,52 @@ else:
 PYEOF
     fi
 
+    # ── usb.c / pcie.c — kernel 6.8 bus-driver struct changes ──────────────────
+    # Neither bus is used by the SDIO BCM43430A1; they only need to compile.
+    #   - usb.c: struct usb_driver lost its 'drvwrap' wrapper in 6.8 (the
+    #     'driver' member is now top-level). Version-guarded.
+    #   - pcie.c: '.node = {}' initializes a member that no longer exists —
+    #     a zero-init of a gone field, so the line is dropped (safe on all kernels).
+    log "Patching usb.c/pcie.c for kernel 6.8 bus-driver changes..."
+    python3 - "$DKMS_DIR" <<'PYEOF' && info "usb.c/pcie.c patched" || warn "usb/pcie patch step had issues"
+import os, re, sys
+d = sys.argv[1]
+
+def ensure_version_h(src):
+    if '#include <linux/version.h>' in src:
+        return src
+    return re.sub(r'(#include [<"][^>"]+[>"]\n)',
+                  r'\1#include <linux/version.h>\n', src, count=1)
+
+# usb.c — usbdrv_wrap (drvwrap) removed in 6.8.
+p = os.path.join(d, 'usb.c')
+if os.path.exists(p):
+    with open(p) as f: src = f.read()
+    m = re.search(
+        r'^([ \t]*)(struct device_driver \*drv = )&brcmf_usbdrvr\.drvwrap\.driver;\s*$',
+        src, re.M)
+    if m:
+        ind, lhs = m.group(1), m.group(2)
+        repl = ('#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)\n'
+                + ind + lhs + '&brcmf_usbdrvr.drvwrap.driver;\n'
+                + '#else\n'
+                + ind + lhs + '&brcmf_usbdrvr.driver;\n'
+                + '#endif')
+        src = src[:m.start()] + repl + src[m.end():]
+        src = ensure_version_h(src)
+        with open(p, 'w') as f: f.write(src)
+        print("usb.c patched")
+
+# pcie.c — '.node = {}' member removed.
+p = os.path.join(d, 'pcie.c')
+if os.path.exists(p):
+    with open(p) as f: src = f.read()
+    new = re.sub(r'^[ \t]*\.node = \{\},[ \t]*\n', '', src, flags=re.M)
+    if new != src:
+        with open(p, 'w') as f: f.write(new)
+        print("pcie.c patched")
+PYEOF
+
     cat > "$DKMS_DIR/dkms.conf" <<EOF
 PACKAGE_NAME="brcmfmac-nexmon"
 PACKAGE_VERSION="$NEXMON_VER"
