@@ -316,6 +316,35 @@ PYEOF
       info "strlcpy → strscpy done"
     fi
 
+    # ── msgbuf.c uses stale 3-arg brcmf_netif_rx / rxreorder ───────────────────
+    # The rest of this driver uses the 2-arg brcmf_netif_rx convention, but
+    # msgbuf.c (PCIe path — unused on our SDIO chip) still passes a 3rd arg and
+    # declares rxreorder with a bool. rxreorder is an empty stub, so dropping
+    # the arg is safe. Align to 2-arg so the module links.
+    MSGBUF="$DKMS_DIR/msgbuf.c"
+    if [ -f "$MSGBUF" ]; then
+      log "Patching msgbuf.c (align brcmf_netif_rx/rxreorder to 2-arg)..."
+      python3 - "$MSGBUF" <<'PYEOF' && info "msgbuf.c patched" || warn "msgbuf.c patch step had issues"
+import re, sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+orig = src
+# Drop the trailing inirq arg on the call.
+src = src.replace('brcmf_netif_rx(ifp, skb, false)', 'brcmf_netif_rx(ifp, skb)')
+# Drop the 'bool inirq' parameter from the rxreorder definition (spans 2 lines).
+src = re.sub(
+    r'(brcmf_msgbuf_rxreorder\(struct brcmf_if \*ifp, struct sk_buff \*skb),\s*\n\s*bool inirq\)',
+    r'\1)', src)
+if src != orig:
+    with open(path, 'w') as f:
+        f.write(src)
+    print("patched")
+else:
+    print("no changes applied")
+PYEOF
+    fi
+
     cat > "$DKMS_DIR/dkms.conf" <<EOF
 PACKAGE_NAME="brcmfmac-nexmon"
 PACKAGE_VERSION="$NEXMON_VER"
