@@ -221,6 +221,33 @@ else
     rm -rf "$DKMS_DIR"
     cp -r "$BRCMFMAC_SRC" "$DKMS_DIR"
 
+    # brcmu_utils.h and brcmu_wifi.h are internal brcm80211 headers that are
+    # not exported to linux-headers packages. The 6.1.y driver needs them for
+    # any out-of-tree DKMS build. Fetch from Linux 6.1 source (API-stable).
+    log "Patching DKMS source: fetching missing brcmutil headers..."
+    BRCMU_BASE="https://raw.githubusercontent.com/torvalds/linux/v6.1/drivers/net/wireless/broadcom/brcm80211/brcmutil"
+    for header in brcmu_utils.h brcmu_wifi.h; do
+      if [ ! -f "$DKMS_DIR/$header" ]; then
+        FOUND=$(find "$NEXMON_SRC" -name "$header" 2>/dev/null | head -1)
+        if [ -n "$FOUND" ]; then
+          cp "$FOUND" "$DKMS_DIR/"
+          info "Copied $header from nexmon source"
+        elif wget -q --timeout=30 "${BRCMU_BASE}/${header}" -O "$DKMS_DIR/$header" 2>/dev/null; then
+          info "Fetched $header from kernel source"
+        else
+          warn "Could not obtain $header — DKMS build will likely fail"
+        fi
+      fi
+    done
+
+    # Add local source dir to compiler include path so the fetched headers
+    # are found when files use #include <brcmu_utils.h> (angle-bracket form).
+    NEXMON_MK="$DKMS_DIR/Makefile"
+    if [ -f "$NEXMON_MK" ] && ! grep -q "\-I\$(src)" "$NEXMON_MK"; then
+      sed -i '1s/^/ccflags-y += -I\$(src)\n/' "$NEXMON_MK"
+      info "Patched Makefile: ccflags-y += -I\$(src)"
+    fi
+
     cat > "$DKMS_DIR/dkms.conf" <<EOF
 PACKAGE_NAME="brcmfmac-nexmon"
 PACKAGE_VERSION="$NEXMON_VER"
@@ -239,7 +266,7 @@ EOF
     else
       warn "DKMS build failed for kernel $KERNEL."
       warn "The driver source ($(basename $BRCMFMAC_SRC)) may not be compatible with kernel $KERNEL."
-      [ -f "$BUILD_LOG" ] && warn "Build log: $BUILD_LOG" && tail -20 "$BUILD_LOG" || true
+      [ -f "$BUILD_LOG" ] && warn "Build log: $BUILD_LOG" && tail -40 "$BUILD_LOG" || true
     fi
   fi
 fi
