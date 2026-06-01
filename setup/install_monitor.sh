@@ -306,6 +306,16 @@ else:
 PYEOF
     fi
 
+    # ── strlcpy removed in kernel 6.8 ──────────────────────────────────────────
+    # Mainline converted every caller to strscpy (identical signature; brcmfmac
+    # ignores the return value at all call sites). Tree-wide swap.
+    if grep -rlq 'strlcpy(' "$DKMS_DIR" --include='*.c' --include='*.h' 2>/dev/null; then
+      log "Patching strlcpy → strscpy (removed in kernel 6.8)..."
+      grep -rl 'strlcpy(' "$DKMS_DIR" --include='*.c' --include='*.h' 2>/dev/null \
+        | while IFS= read -r f; do sed -i 's/\bstrlcpy(/strscpy(/g' "$f"; done
+      info "strlcpy → strscpy done"
+    fi
+
     cat > "$DKMS_DIR/dkms.conf" <<EOF
 PACKAGE_NAME="brcmfmac-nexmon"
 PACKAGE_VERSION="$NEXMON_VER"
