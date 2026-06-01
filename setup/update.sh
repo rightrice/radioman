@@ -148,23 +148,27 @@ else
   same "config.txt: dtoverlay=dwc2"
 fi
 
-# Fix cmdline.txt — add modules-load=dwc2,g_ether if missing
-if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE" 2>/dev/null; then
+# Fix cmdline.txt — migrate g_ether → g_ncm, add g_ncm if missing
+if grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE" 2>/dev/null; then
+  sed -i 's/modules-load=dwc2,g_ether/modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
+  change "cmdline.txt: migrated g_ether → g_ncm"
+  REBOOT_NEEDED=true
+elif ! grep -q "modules-load=dwc2,g_ncm" "$CMDLINE_FILE" 2>/dev/null; then
   if grep -q "rootwait" "$CMDLINE_FILE"; then
-    sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
+    sed -i 's/rootwait/rootwait modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
   elif grep -q "console=" "$CMDLINE_FILE"; then
-    sed -i 's/console=/modules-load=dwc2,g_ether console=/' "$CMDLINE_FILE"
+    sed -i 's/console=/modules-load=dwc2,g_ncm console=/' "$CMDLINE_FILE"
   else
-    sed -i '1s/$/ modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
+    sed -i '1s/$/ modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
   fi
-  if grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
-    change "cmdline.txt: added modules-load=dwc2,g_ether"
+  if grep -q "modules-load=dwc2,g_ncm" "$CMDLINE_FILE"; then
+    change "cmdline.txt: added modules-load=dwc2,g_ncm"
     REBOOT_NEEDED=true
   else
-    warn "cmdline.txt: could not add g_ether — edit $CMDLINE_FILE manually"
+    warn "cmdline.txt: could not add g_ncm — edit $CMDLINE_FILE manually"
   fi
 else
-  same "cmdline.txt: modules-load=dwc2,g_ether"
+  same "cmdline.txt: modules-load=dwc2,g_ncm"
 fi
 
 # Ensure usb0 NM profile exists

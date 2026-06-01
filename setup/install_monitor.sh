@@ -111,7 +111,7 @@ else
   apt-get install -y \
     git libgmp3-dev gawk qpdf flex bison libfl-dev \
     build-essential cmake automake autoconf libtool texinfo \
-    python3 dkms bc 2>/dev/null || \
+    python3 dkms bc gcc-arm-none-eabi 2>/dev/null || \
     warn "Some build deps may be missing — continuing anyway"
 
   # ── Clone nexmon ────────────────────────────────────────────────────────────
@@ -125,8 +125,30 @@ else
     git clone --depth=1 -q https://github.com/seemoo-lab/nexmon.git "$NEXMON_SRC"
   fi
 
-  NEXMON_TAG=$(git -C "$NEXMON_SRC" describe --tags --always 2>/dev/null || echo "unknown")
+  NEXMON_TAG=$(git -C "$NEXMON_SRC" describe --tags --always 2>/dev/null || echo "1.0.0")
   info "nexmon version: $NEXMON_TAG"
+
+  # ── Fix nexmon toolchain for aarch64 ───────────────────────────────────────
+  # Nexmon ships a prebuilt arm-none-eabi-gcc for armv7l (32-bit ARM).
+  # On aarch64 Ubuntu this binary cannot execute. Replace it with the system
+  # gcc-arm-none-eabi which is built for the host architecture.
+  SYSTEM_GCC=$(command -v arm-none-eabi-gcc 2>/dev/null || echo "")
+  if [ -n "$SYSTEM_GCC" ]; then
+    TC_DIR=$(find "$NEXMON_SRC/buildtools" -maxdepth 1 -type d -name "gcc-arm-none-eabi*armv7l" 2>/dev/null | head -1)
+    if [ -n "$TC_DIR" ]; then
+      for bin in arm-none-eabi-gcc arm-none-eabi-g++ arm-none-eabi-ld arm-none-eabi-objcopy arm-none-eabi-strip; do
+        BUNDLED="$TC_DIR/bin/$bin"
+        SYSTEM_BIN=$(command -v "$bin" 2>/dev/null || echo "")
+        if [ -f "$BUNDLED" ] && [ -n "$SYSTEM_BIN" ]; then
+          mv "$BUNDLED" "${BUNDLED}.orig" 2>/dev/null || true
+          ln -sf "$SYSTEM_BIN" "$BUNDLED"
+        fi
+      done
+      log "Nexmon toolchain patched for aarch64 (using system gcc-arm-none-eabi)"
+    fi
+  else
+    warn "gcc-arm-none-eabi not found — firmware compilation may fail"
+  fi
 
   # ── Verify BCM43430A1 patch is present ─────────────────────────────────────
   PATCH_DIR="$NEXMON_SRC/patches/$BCM_CHIP/$BCM_FW_VER/nexmon"
@@ -137,8 +159,6 @@ else
   set +e
   (
     cd "$NEXMON_SRC"
-    # setup_env.sh exports NEXMON_ROOT, ARM toolchain paths, etc.
-    # shellcheck disable=SC1091
     source setup_env.sh 2>/dev/null
     make -C buildtools 2>/dev/null
   )
@@ -158,54 +178,69 @@ else
   set -e
 
   if [ $BUILD_EXIT -ne 0 ]; then
-    warn "Patch build returned non-zero — checking for brcmfmac output anyway"
-    tail -20 "$BUILD_LOG" || true
+    warn "Patch build returned non-zero — checking for brcmfmac driver source anyway"
   fi
 
-  # ── Register patched brcmfmac driver as a DKMS module ──────────────────────
-  # Find the patched brcmfmac source directory built by nexmon
-  BRCMFMAC_SRC=$(find "$PATCH_DIR" -maxdepth 2 -type d -name "brcmfmac*nexmon*" 2>/dev/null | head -1)
-  [ -z "$BRCMFMAC_SRC" ] && \
-    BRCMFMAC_SRC=$(find "$NEXMON_SRC" -maxdepth 5 -type d -name "brcmfmac*nexmon*" 2>/dev/null | head -1)
+  # ── Find patched brcmfmac driver source ────────────────────────────────────
+  # Prefer a driver version close to the running kernel; fall back to any available
+  KERNEL_MINOR=$(uname -r | grep -o '^[0-9]*\.[0-9]*' || echo "6.8")
+  BRCMFMAC_SRC=""
+  for candidate in \
+    "$NEXMON_SRC/patches/driver/brcmfmac_${KERNEL_MINOR}.y-nexmon" \
+    "$NEXMON_SRC/patches/driver/brcmfmac_6.1.y-nexmon" \
+    "$NEXMON_SRC/patches/driver/brcmfmac_5.15.y-nexmon" \
+    "$NEXMON_SRC/patches/driver/brcmfmac_5.10.y-nexmon"
+  do
+    if [ -d "$candidate" ]; then
+      BRCMFMAC_SRC="$candidate"
+      break
+    fi
+  done
+
+  # Also search broadly as a last resort
+  if [ -z "$BRCMFMAC_SRC" ]; then
+    BRCMFMAC_SRC=$(find "$NEXMON_SRC/patches/driver" -maxdepth 1 -type d -name "brcmfmac*nexmon*" 2>/dev/null \
+      | sort -V | tail -1)
+  fi
 
   if [ -z "$BRCMFMAC_SRC" ] || [ ! -d "$BRCMFMAC_SRC" ]; then
-    warn "Could not locate patched brcmfmac source directory."
-    warn "The nexmon build may have succeeded but produced output in an unexpected path."
-    warn "Check: find $NEXMON_SRC -name 'brcmfmac*.ko' 2>/dev/null"
-    warn "And: ls $PATCH_DIR"
-    warn ""
-    warn "If a .ko file was built, copy it manually:"
-    warn "  cp <path-to-brcmfmac.ko> /lib/modules/$KERNEL/kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac/"
-    warn "  depmod -a && modprobe brcmfmac"
+    warn "Could not locate patched brcmfmac driver source."
+    warn "Check: ls $NEXMON_SRC/patches/driver/"
+    warn "Then re-run: sudo bash setup/install_monitor.sh"
   else
-    info "Patched brcmfmac source: $BRCMFMAC_SRC"
-    NEXMON_VER=$(echo "$NEXMON_TAG" | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | head -1 || echo "1.0.0")
+    info "Patched brcmfmac driver source: $BRCMFMAC_SRC"
+
+    # Use a clean semver for DKMS — extract from tag or default to 1.0.0
+    NEXMON_VER=$(echo "$NEXMON_TAG" | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' | head -1 || true)
+    [ -z "$NEXMON_VER" ] && NEXMON_VER="1.0.0"
 
     # Remove any previous DKMS registration
     dkms remove brcmfmac-nexmon/"$NEXMON_VER" --all 2>/dev/null || true
 
-    # Install DKMS module source
     DKMS_DIR="/usr/src/brcmfmac-nexmon-${NEXMON_VER}"
     rm -rf "$DKMS_DIR"
     cp -r "$BRCMFMAC_SRC" "$DKMS_DIR"
 
-    # Write dkms.conf if not present
-    if [ ! -f "$DKMS_DIR/dkms.conf" ]; then
-      cat > "$DKMS_DIR/dkms.conf" <<EOF
+    cat > "$DKMS_DIR/dkms.conf" <<EOF
 PACKAGE_NAME="brcmfmac-nexmon"
 PACKAGE_VERSION="$NEXMON_VER"
 BUILT_MODULE_NAME[0]="brcmfmac"
 DEST_MODULE_LOCATION[0]="/kernel/drivers/net/wireless/broadcom/brcm80211/brcmfmac"
 AUTOINSTALL="yes"
 EOF
-    fi
 
     log "Registering brcmfmac-nexmon-$NEXMON_VER with DKMS..."
-    dkms add     -m brcmfmac-nexmon -v "$NEXMON_VER" 2>/dev/null || true
-    dkms build   -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" && \
-    dkms install -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" --force && \
-      log "brcmfmac-nexmon DKMS module installed" || \
-      warn "DKMS install failed — check: dkms status && cat /var/lib/dkms/brcmfmac-nexmon/$NEXMON_VER/build/make.log"
+    dkms add -m brcmfmac-nexmon -v "$NEXMON_VER" 2>/dev/null || true
+
+    BUILD_LOG="/var/lib/dkms/brcmfmac-nexmon/$NEXMON_VER/build/make.log"
+    if dkms build -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" 2>/dev/null && \
+       dkms install -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" --force 2>/dev/null; then
+      log "brcmfmac-nexmon DKMS module installed"
+    else
+      warn "DKMS build failed for kernel $KERNEL."
+      warn "The driver source ($(basename $BRCMFMAC_SRC)) may not be compatible with kernel $KERNEL."
+      [ -f "$BUILD_LOG" ] && warn "Build log: $BUILD_LOG" && tail -20 "$BUILD_LOG" || true
+    fi
   fi
 fi
 

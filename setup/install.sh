@@ -228,28 +228,32 @@ else
   log "dtoverlay=dwc2 set in $CONFIG_FILE"
 
   if [ -f "$CMDLINE_FILE" ]; then
-    if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE"; then
+    # Migrate g_ether → g_ncm if present (g_ncm has better macOS compatibility)
+    sed -i 's/modules-load=dwc2,g_ether/modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
+    if ! grep -q "modules-load=dwc2,g_ncm" "$CMDLINE_FILE"; then
       if grep -q "rootwait" "$CMDLINE_FILE"; then
-        sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
+        sed -i 's/rootwait/rootwait modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
       elif grep -q "console=" "$CMDLINE_FILE"; then
-        sed -i 's/console=/modules-load=dwc2,g_ether console=/' "$CMDLINE_FILE"
+        sed -i 's/console=/modules-load=dwc2,g_ncm console=/' "$CMDLINE_FILE"
       else
-        sed -i '1s/$/ modules-load=dwc2,g_ether/' "$CMDLINE_FILE"
+        sed -i '1s/$/ modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
       fi
     fi
-    grep -q "modules-load=dwc2,g_ether" "$CMDLINE_FILE" && \
-      log "USB gadget ethernet enabled (modules-load=dwc2,g_ether)" || \
-      warn "Could not add g_ether to $CMDLINE_FILE — add it manually"
+    grep -q "modules-load=dwc2,g_ncm" "$CMDLINE_FILE" && \
+      log "USB gadget ethernet enabled (modules-load=dwc2,g_ncm)" || \
+      warn "Could not add g_ncm to $CMDLINE_FILE — add it manually"
   fi
 fi
 
-# Persistent g_ether MAC — prevents host OS treating each reboot as a new device
-cat > /etc/modprobe.d/g_ether.conf <<'EOF'
-options g_ether host_addr=72:48:4f:52:4d:01 dev_addr=72:48:4f:52:4d:02
+# Persistent MAC addresses for g_ncm — prevents host OS treating each reboot as new device
+# g_ncm has better macOS compatibility than g_ether on Apple Silicon
+rm -f /etc/modprobe.d/g_ether.conf
+cat > /etc/modprobe.d/g_ncm.conf <<'EOF'
+options g_ncm host_addr=72:48:4f:52:4d:01 dev_addr=72:48:4f:52:4d:02
 EOF
-log "g_ether: persistent MAC configured"
+log "g_ncm: persistent MAC configured"
 
-# usb0 static IP via NetworkManager
+# usb0 static IP — netplan (Ubuntu) or NetworkManager (Kali)
 if command -v nmcli &>/dev/null; then
   nmcli connection delete "usb-gadget" 2>/dev/null || true
   nmcli connection add \
@@ -263,8 +267,31 @@ if command -v nmcli &>/dev/null; then
     ipv4.never-default no \
     ipv6.method disabled \
     connection.autoconnect yes 2>/dev/null && \
-    log "usb0 configured (10.55.0.1, gw 10.55.0.2)" || \
+    log "usb0 configured via NetworkManager (10.55.0.1, gw 10.55.0.2)" || \
     warn "Could not create usb0 NM profile — configure manually after reboot"
+elif command -v netplan &>/dev/null; then
+  cat > /etc/netplan/10-usb-gadget.yaml <<'EOF'
+network:
+  version: 2
+  ethernets:
+    usb0:
+      dhcp4: false
+      addresses:
+        - 10.55.0.1/24
+      routes:
+        - to: default
+          via: 10.55.0.2
+          metric: 200
+      nameservers:
+        addresses: [1.1.1.1, 8.8.8.8]
+      optional: true
+EOF
+  chmod 600 /etc/netplan/10-usb-gadget.yaml
+  netplan apply 2>/dev/null || true
+  log "usb0 configured via netplan (10.55.0.1, gw 10.55.0.2)"
+else
+  warn "Neither nmcli nor netplan found — configure usb0 manually after reboot"
+  warn "  Create /etc/netplan/10-usb-gadget.yaml with address 10.55.0.1/24"
 fi
 
 # ── Radioman directories and source files ──────────────────────────────────────
