@@ -348,10 +348,11 @@ radioman/
 │   ├── linux_connect.sh        # Ubuntu/Linux USB gadget setup (iptables NAT sharing)
 │   └── build_llama_wsl.sh      # Cross-compile llama-cli (WSL2)
 ├── setup/
-│   ├── install.sh              # Full install script (Kali Linux)
+│   ├── install.sh              # Full install script
 │   ├── install_monitor.sh      # Install / verify nexmon DKMS monitor mode
 │   ├── install_ai.sh           # AI model + binary installer
 │   ├── install_pisugar.sh      # PiSugar 2 battery setup
+│   ├── tune.sh                 # Disable unused Ubuntu services, reduce RAM/IO usage
 │   ├── update.sh               # Update deployed files after git pull
 │   ├── radioman.service        # systemd service
 │   └── radioman.cap            # bettercap caplet
