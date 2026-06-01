@@ -182,11 +182,15 @@ else
   fi
 
   # ── Find patched brcmfmac driver source ────────────────────────────────────
-  # Prefer a driver version close to the running kernel; fall back to any available
+  # Prefer the driver version closest to (and not newer than) the running kernel.
+  # Order matters: kernel 6.8 → try 6.6.y first, then descend. Newer driver
+  # source means fewer kernel API mismatches (e.g. WLC_*→BRCM_* rename).
   KERNEL_MINOR=$(uname -r | grep -o '^[0-9]*\.[0-9]*' || echo "6.8")
   BRCMFMAC_SRC=""
   for candidate in \
     "$NEXMON_SRC/patches/driver/brcmfmac_${KERNEL_MINOR}.y-nexmon" \
+    "$NEXMON_SRC/patches/driver/brcmfmac_6.6.y-nexmon" \
+    "$NEXMON_SRC/patches/driver/brcmfmac_6.2.y-nexmon" \
     "$NEXMON_SRC/patches/driver/brcmfmac_6.1.y-nexmon" \
     "$NEXMON_SRC/patches/driver/brcmfmac_5.15.y-nexmon" \
     "$NEXMON_SRC/patches/driver/brcmfmac_5.10.y-nexmon"
@@ -197,7 +201,7 @@ else
     fi
   done
 
-  # Also search broadly as a last resort
+  # Also search broadly as a last resort — pick highest version available
   if [ -z "$BRCMFMAC_SRC" ]; then
     BRCMFMAC_SRC=$(find "$NEXMON_SRC/patches/driver" -maxdepth 1 -type d -name "brcmfmac*nexmon*" 2>/dev/null \
       | sort -V | tail -1)
@@ -239,24 +243,9 @@ else
       info "Patched Makefile: added -I\$(src) and -I\$(src)/include"
     fi
 
-    # brcmu_utils.h, brcmu_wifi.h, brcmu_d11.h are internal brcm80211 headers
-    # not exported to linux-headers packages. Place in DKMS root so -I$(src) finds them.
-    log "Fetching missing brcmutil headers..."
-    BRCMU_BASE="https://raw.githubusercontent.com/torvalds/linux/v6.1/drivers/net/wireless/broadcom/brcm80211/brcmutil"
-    for header in brcmu_utils.h brcmu_wifi.h brcmu_d11.h; do
-      if [ ! -f "$DKMS_DIR/$header" ]; then
-        FOUND=$(find "$NEXMON_SRC/patches/driver" -maxdepth 3 -name "$header" \
-          ! -path "*/include/*" 2>/dev/null | head -1)
-        if [ -n "$FOUND" ]; then
-          cp "$FOUND" "$DKMS_DIR/"
-          info "Copied $header from nexmon source"
-        elif wget -q --timeout=30 "${BRCMU_BASE}/${header}" -O "$DKMS_DIR/$header" 2>/dev/null; then
-          info "Fetched $header from kernel source"
-        else
-          warn "Could not obtain $header — build may fail"
-        fi
-      fi
-    done
+    # brcmu_utils.h, brcmu_wifi.h, brcmu_d11.h, defs.h all live in the nexmon
+    # driver source's include/ subdirectory — they're reachable via -I$(src)/include
+    # from the Makefile patch above. No fetch needed.
 
     cat > "$DKMS_DIR/dkms.conf" <<EOF
 PACKAGE_NAME="brcmfmac-nexmon"
