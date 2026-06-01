@@ -247,6 +247,65 @@ else
     # driver source's include/ subdirectory — they're reachable via -I$(src)/include
     # from the Makefile patch above. No fetch needed.
 
+    # ── Patch driver source for kernel 6.7+ API changes ────────────────────────
+    # nexmon's newest driver targets 6.6.y. Kernel 6.7 made two breaking changes
+    # to cfg80211 that the 6.6.y source can't compile against:
+    #   1. cfg80211_inform_bss lost its .scan_width member
+    #   2. .change_beacon callback takes cfg80211_ap_update* instead of
+    #      cfg80211_beacon_data*
+    # Both are guarded with LINUX_VERSION_CODE so the source still builds on
+    # older kernels. Idempotent — DKMS_DIR is a fresh copy each run.
+    CFG="$DKMS_DIR/cfg80211.c"
+    if [ -f "$CFG" ]; then
+      log "Patching cfg80211.c for kernel 6.7+ API changes..."
+      python3 - "$CFG" <<'PYEOF' && info "cfg80211.c patched" || warn "cfg80211.c patch step had issues — build may still fail"
+import re, sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+changed = False
+
+# Ensure LINUX_VERSION_CODE / KERNEL_VERSION are available.
+if '#include <linux/version.h>' not in src:
+    src = re.sub(r'(#include [<"][^>"]+[>"]\n)',
+                 r'\1#include <linux/version.h>\n', src, count=1)
+    changed = True
+
+# Patch 1 — guard scan_width (removed in 6.7).
+m = re.search(r'^([ \t]*)bss_data\.scan_width = NL80211_BSS_CHAN_WIDTH_20;\s*$',
+              src, re.M)
+if m and 'scan_width' in src and '#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)\n' + m.group(0) not in src:
+    line = m.group(0)
+    src = src.replace(line,
+        '#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)\n' + line + '\n#endif', 1)
+    changed = True
+
+# Patch 2 — change_beacon signature (cfg80211_beacon_data -> cfg80211_ap_update).
+m = re.search(
+    r'(brcmf_cfg80211_change_beacon\(struct wiphy \*wiphy, struct net_device \*ndev,\n)'
+    r'([ \t]*)struct cfg80211_beacon_data \*info\)\n\{\n',
+    src)
+if m and 'info_update' not in src:
+    indent = m.group(2)
+    repl = (m.group(1)
+        + '#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)\n'
+        + indent + 'struct cfg80211_beacon_data *info)\n{\n'
+        + '#else\n'
+        + indent + 'struct cfg80211_ap_update *info_update)\n{\n'
+        + '\tstruct cfg80211_beacon_data *info = &info_update->beacon;\n'
+        + '#endif\n')
+    src = src[:m.start()] + repl + src[m.end():]
+    changed = True
+
+if changed:
+    with open(path, 'w') as f:
+        f.write(src)
+    print("patched")
+else:
+    print("no changes applied")
+PYEOF
+    fi
+
     cat > "$DKMS_DIR/dkms.conf" <<EOF
 PACKAGE_NAME="brcmfmac-nexmon"
 PACKAGE_VERSION="$NEXMON_VER"
@@ -262,6 +321,27 @@ EOF
     if dkms build -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" 2>/dev/null && \
        dkms install -m brcmfmac-nexmon -v "$NEXMON_VER" -k "$KERNEL" --force 2>/dev/null; then
       log "brcmfmac-nexmon DKMS module installed"
+
+      # ── Pin the kernel ───────────────────────────────────────────────────────
+      # nexmon has no driver for kernels newer than 6.6.y. This module is
+      # patched specifically for $KERNEL. If apt upgrades the kernel, the
+      # module won't match and monitor mode breaks. Hold the kernel packages.
+      log "Pinning kernel $KERNEL so apt upgrades can't rebreak monitor mode..."
+      HELD=""
+      for pkg in linux-image-raspi linux-headers-raspi linux-raspi \
+                 "linux-image-${KERNEL}" "linux-headers-${KERNEL}" \
+                 "linux-modules-${KERNEL}"; do
+        if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+          apt-mark hold "$pkg" >/dev/null 2>&1 && HELD="$HELD $pkg"
+        fi
+      done
+      if [ -n "$HELD" ]; then
+        info "Held:$HELD"
+        info "To allow kernel upgrades later: sudo apt-mark unhold$HELD"
+      else
+        warn "Could not hold kernel packages — run manually:"
+        warn "  sudo apt-mark hold linux-image-raspi linux-headers-raspi linux-raspi"
+      fi
     else
       warn "DKMS build failed for kernel $KERNEL."
       warn "The driver source ($(basename $BRCMFMAC_SRC)) may not be compatible with kernel $KERNEL."
