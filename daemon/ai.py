@@ -9,7 +9,9 @@ Install AI components first: sudo bash setup/install_ai.sh
 
 import logging
 import os
+import pty
 import re
+import select
 import subprocess
 import threading
 import time
@@ -191,46 +193,61 @@ class AIEngine:
         log.debug("llama-cli: ctx=%d batch=%d n_predict=%d threads=%d",
                   CTX_SIZE, BATCH, N_PREDICT, THREADS)
 
-        # This llama-cli build runs an interactive REPL that never exits on EOF
-        # (it busy-loops printing ">"). So we stream stdout, stop once the
-        # end-of-generation stats line appears (or the REPL starts idle-looping),
-        # then kill it. A watchdog timer enforces the hard timeout.
+        # This llama-cli build is an interactive REPL: it block-buffers stdout
+        # when that's a pipe (so the answer is lost), and never exits on EOF.
+        # Run it under a PTY so it line-flushes like a real terminal; stream
+        # until the end-of-generation stats line, then kill it. A deadline bounds
+        # the whole thing.
+        master_fd, slave_fd = pty.openpty()
         try:
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL, text=True,
+                cmd, stdout=slave_fd, stderr=slave_fd,
+                stdin=subprocess.DEVNULL, close_fds=True,
             )
         except FileNotFoundError:
+            os.close(master_fd); os.close(slave_fd)
             log.error("llama-cli not found at %s", LLAMA_CLI)
             return None
         except Exception as e:
+            os.close(master_fd); os.close(slave_fd)
             log.error("AI inference error: %s", e)
             return None
+        os.close(slave_fd)   # parent only reads the master side
 
-        collected, idle_prompts = [], 0
-        watchdog = threading.Timer(TIMEOUT, proc.kill)
-        watchdog.start()
+        collected, buf, done = [], "", False
+        deadline = time.time() + TIMEOUT
         try:
-            for line in proc.stdout:
-                if "Generation:" in line and "t/s" in line:
-                    break                                  # generation stats = done
-                if line.strip() == ">":                    # REPL idle prompt
-                    idle_prompts += 1
-                    if idle_prompts >= 2 and any(s.strip() for s in collected):
-                        break
+            while time.time() < deadline and not done:
+                try:
+                    ready, _, _ = select.select([master_fd], [], [], 1.0)
+                except (OSError, ValueError):
+                    break
+                if not ready:
+                    if proc.poll() is not None:
+                        break                              # process gone, no more output
                     continue
-                collected.append(line)
-        except Exception as e:
-            log.debug("AI read error: %s", e)
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError:
+                    break                                  # PTY closed (EOF)
+                if not data:
+                    break
+                buf += data.decode("utf-8", "replace")
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    if "Generation:" in line and "t/s" in line:
+                        done = True                        # generation stats = done
+                        break
+                    collected.append(line + "\n")
         finally:
-            watchdog.cancel()
-            proc.kill()
-            try:
-                proc.wait(timeout=5)
-            except Exception:
-                pass
+            try: proc.kill()
+            except Exception: pass
+            try: proc.wait(timeout=5)
+            except Exception: pass
+            try: os.close(master_fd)
+            except Exception: pass
 
-        out = "".join(collected)
+        out = "".join(collected) + buf
         # The real answer follows the FINAL assistant turn (the prompt is echoed);
         # rsplit also leaves clean output untouched when there's no marker.
         if "<|assistant|>" in out:
@@ -240,6 +257,12 @@ class AIEngine:
             if stop in out:
                 out = out[:out.index(stop)].strip()
         out = re.sub(r"\n?>\s*$", "", out).strip()
+        # Guard: if we only captured the REPL banner (no real answer), fail clearly
+        # instead of returning the banner as the response.
+        low = out.lower()
+        if not out or "available commands" in low or low.startswith("loading model"):
+            log.warning("AI: only captured REPL banner, no response")
+            return None
         return out or None
 
     def _run(self, messages: list, extra_system: str = "") -> dict:
