@@ -11,6 +11,8 @@ let graphAnim   = null;
 let graphPositions = {};   // id -> {x,y,vx,vy}, persists across polls
 let graphSelected  = null; // id of clicked node
 let graphSettle    = 0;    // frames the layout has been "cool"
+let graphHeat      = {};   // ap id -> 0..1 congestion (drives node colour)
+let graphMode      = "wifi"; // "wifi" (APs↔clients) or "lan" (gateway↔hosts)
 let graphCtx = null, graphW = 0, graphH = 0, graphDpr = 1;
 let MY_BSSID    = "";   // user's own network, set from /api/status
 
@@ -92,7 +94,7 @@ async function fetchViewData() {
     case "networks":  return get("/api/networks");
     case "clients":   return get("/api/clients");
     case "captures":  return get("/api/captures");
-    case "graph":     return get("/api/graph");
+    case "graph":     return graphMode === "lan" ? get("/api/hosts") : get("/api/graph");
     case "hosts":     return Promise.all([get("/api/hosts"), get("/api/hosts/scanstatus")]);
     case "log":       return get("/api/events?limit=100");
     case "ignore":    return get("/api/ignore");
@@ -139,12 +141,15 @@ function renderMain(status, data, xplt = null) {
     case "networks":  main.innerHTML = viewNetworks(data || []); attachIgnoreHandlers(); break;
     case "clients":   main.innerHTML = viewClients(data || []); break;
     case "captures":  main.innerHTML = viewCaptures(data || []); attachCrackHandlers(); break;
-    case "graph":
+    case "graph": {
       // Build the canvas once; subsequent polls only feed new data (no flash,
       // selection + layout persist).
       if (!document.getElementById("rmGraphCanvas")) main.innerHTML = viewGraph();
-      drawGraph(data || { nodes: [], edges: [] });
+      attachGraphControls();
+      const gdata = graphMode === "lan" ? hostsToGraph(data || []) : (data || { nodes: [], edges: [] });
+      drawGraph(gdata);
       break;
+    }
     case "hosts": {
       const [hostRows, scan] = Array.isArray(data) ? data : [[], {}];
       main.innerHTML = viewHosts(hostRows || [], scan || {});
@@ -542,21 +547,65 @@ function attachCrackHandlers() {
 }
 
 // ── Graph ─────────────────────────────────────────────────────────────────────
+function graphLegendHtml() {
+  return graphMode === "lan"
+    ? `<span class="rm-legend-gateway">Gateway / Router</span><span class="rm-legend-host">Hosts</span>`
+    : `<span class="rm-legend-ap">APs — low → high congestion</span><span class="rm-legend-client">Clients</span>`;
+}
+
 function viewGraph() {
   return `
     <div class="dash-panel dash-panel-full">
-      <div class="dash-panel-header"><h3>Network Graph</h3>
-        <span class="rm-muted" style="font-size:0.72rem">click a node for details</span>
+      <div class="dash-panel-header">
+        <h3>Network Graph</h3>
+        <div class="rm-graph-controls">
+          <select class="rm-graph-mode" id="rmGraphMode" aria-label="Graph view">
+            <option value="wifi" ${graphMode === "wifi" ? "selected" : ""}>WiFi Topology — APs &amp; clients</option>
+            <option value="lan"  ${graphMode === "lan"  ? "selected" : ""}>LAN Topology — hosts</option>
+          </select>
+          <span class="rm-muted" style="font-size:0.72rem">click a node for details</span>
+        </div>
       </div>
       <div class="rm-graph-wrap">
         <canvas id="rmGraphCanvas"></canvas>
-        <div class="rm-graph-legend">
-          <span class="rm-legend-ap">Access Points</span>
-          <span class="rm-legend-client">Clients</span>
-        </div>
+        <div class="rm-graph-legend" id="rmGraphLegend">${graphLegendHtml()}</div>
         <div class="rm-graph-info" id="rmGraphInfo" style="display:none"></div>
       </div>
     </div>`;
+}
+
+function hostsToGraph(hosts) {
+  hosts = hosts || [];
+  const gw = hosts.find(h => (h.ip || "").endsWith(".1"));
+  const gwId = gw ? gw.ip : "__gateway__";
+  const nodes = [gw
+    ? { id: gw.ip, label: gw.hostname || gw.vendor || gw.ip, type: "gateway",
+        ip: gw.ip, mac: gw.mac, vendor: gw.vendor, hostname: gw.hostname }
+    : { id: gwId, label: "Gateway", type: "gateway", ip: "", mac: "", vendor: "", hostname: "" }];
+  const edges = [];
+  hosts.forEach(h => {
+    if (gw && h.ip === gw.ip) return;
+    const id = h.ip || h.mac;
+    if (!id) return;
+    nodes.push({ id, label: h.hostname || h.vendor || h.ip, type: "host",
+                 ip: h.ip, mac: h.mac, vendor: h.vendor, hostname: h.hostname });
+    edges.push({ source: gwId, target: id });
+  });
+  return { nodes, edges };
+}
+
+function attachGraphControls() {
+  const sel = document.getElementById("rmGraphMode");
+  if (sel && !sel._rmBound) {
+    sel._rmBound = true;
+    sel.addEventListener("change", () => {
+      graphMode = sel.value;
+      graphPositions = {}; graphSelected = null; updateGraphInfo(null);
+      const legend = document.getElementById("rmGraphLegend");
+      if (legend) legend.innerHTML = graphLegendHtml();
+      poll();   // re-fetch with the new data source
+    });
+  }
 }
 
 function drawGraph(data) {
@@ -593,6 +642,15 @@ function drawGraph(data) {
     }
   });
   if (graphSelected && !ids.has(graphSelected)) { graphSelected = null; updateGraphInfo(null); }
+
+  // Heat-colour AP nodes by congestion contribution (band-agnostic co-channel).
+  graphHeat = {};
+  const aps = graphNodes.filter(n => n.type === "ap");
+  const congAt = ch => aps.reduce(
+    (s, n) => s + sigWeight(n.rssi) * Math.max(0, 1 - Math.abs(ch - n.channel) / 5), 0);
+  const scores = aps.map(n => sigWeight(n.rssi) * congAt(n.channel));
+  const maxScore = Math.max(1, ...scores);
+  aps.forEach((n, i) => { graphHeat[n.id] = scores[i] / maxScore; });
 
   if (!canvas._rmClickBound) {
     canvas.addEventListener("click", onGraphClick);
@@ -664,7 +722,7 @@ function graphRender() {
 
   const theme     = getTheme();
   const bgColor   = theme === "dark" ? "#0b1424" : "#f5f8fc";
-  const apColor   = "#5ee1c8", cliColor = "#fbbf24";
+  const cliColor  = "#fbbf24";
   const edgeColor = theme === "dark" ? "rgba(148,163,184,0.18)" : "rgba(15,23,42,0.10)";
   const textColor = theme === "dark" ? "#94a3b8" : "#475569";
 
@@ -681,14 +739,20 @@ function graphRender() {
   graphNodes.forEach(n => {
     const p = P[n.id]; if (!p) return;
     const sel = n.id === graphSelected;
-    const r   = (n.type === "ap" ? 8 : 5) + (sel ? 3 : 0);
+    const big = n.type === "ap" || n.type === "gateway";
+    const r   = (n.type === "gateway" ? 10 : big ? 8 : 5) + (sel ? 3 : 0);
+    let fill;
+    if (n.type === "ap")           fill = heatColor(graphHeat[n.id] ?? 0);
+    else if (n.type === "gateway") fill = "#5ee1c8";
+    else if (n.type === "host")    fill = "#60a5fa";
+    else                           fill = cliColor;   // client
     ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fillStyle   = n.type === "ap" ? apColor : cliColor;
-    ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = sel ? 16 : 6;
+    ctx.fillStyle   = fill;
+    ctx.shadowColor = fill; ctx.shadowBlur = sel ? 16 : 6;
     ctx.fill(); ctx.shadowBlur = 0;
     if (sel) { ctx.strokeStyle = theme === "dark" ? "#fff" : "#0b1424"; ctx.lineWidth = 1.5; ctx.stroke(); }
 
-    if (n.type === "ap" || graphNodes.length < 50) {
+    if (big || graphNodes.length < 50) {
       ctx.fillStyle = textColor;
       ctx.font      = "10px ui-monospace,monospace";
       ctx.textAlign = "center";
@@ -717,18 +781,24 @@ function updateGraphInfo(node) {
   if (!box) return;
   if (!node) { box.style.display = "none"; return; }
   const row = (k, v) => `<div class="rm-gi-row"><span>${k}</span><span>${v}</span></div>`;
+  const mono = v => `<span class="rm-mono">${esc(v || "—")}</span>`;
   let body;
   if (node.type === "ap") {
-    body = row("BSSID", `<span class="rm-mono">${esc(node.id)}</span>`)
+    body = row("BSSID", mono(node.id))
          + row("Channel", node.channel ?? "—")
          + row("Signal", node.rssi != null ? node.rssi + " dBm" : "—")
          + row("Security", esc(node.security || "—"))
          + row("Clients", node.clients ?? 0);
+  } else if (node.type === "gateway" || node.type === "host") {
+    body = row("IP", mono(node.ip))
+         + row("MAC", mono(node.mac))
+         + row("Vendor", esc(node.vendor || "—"))
+         + row("Hostname", esc(node.hostname || "—"));
   } else {
-    body = row("MAC", `<span class="rm-mono">${esc(node.id)}</span>`)
+    body = row("MAC", mono(node.id))
          + row("Signal", node.rssi != null ? node.rssi + " dBm" : "—")
          + row("Vendor", esc(node.vendor || "—"))
-         + row("AP", `<span class="rm-mono">${esc(node.bssid || "—")}</span>`);
+         + row("AP", mono(node.bssid));
   }
   box.innerHTML = `<div class="rm-gi-title">${esc(node.label || node.id)}
       <button class="rm-gi-close" id="rmGiClose">✕</button></div>${body}`;
@@ -1379,14 +1449,16 @@ function drawDonutChart(canvas, secData, textClr) {
     angle += sweep;
   });
 
-  // Center label
-  ctx.fillStyle = textClr;
-  ctx.font = `bold ${Math.round(outerR * 0.5)}px ui-monospace,monospace`;
+  // Center label — sized + vertically centred to sit inside the hole
   ctx.textAlign = "center";
-  ctx.fillText(String(total), cx, cy + 6);
-  ctx.font = `${Math.round(outerR * 0.22)}px ui-monospace,monospace`;
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = textClr;
+  ctx.font = `bold ${Math.round(outerR * 0.40)}px ui-monospace,monospace`;
+  ctx.fillText(String(total), cx, cy - outerR * 0.10);
+  ctx.font = `${Math.round(outerR * 0.15)}px ui-monospace,monospace`;
   ctx.fillStyle = textClr + "99";
-  ctx.fillText("networks", cx, cy + outerR * 0.42);
+  ctx.fillText("networks", cx, cy + outerR * 0.22);
+  ctx.textBaseline = "alphabetic";
 
   // Legend to the right
   const lx = cx + outerR + 16;
@@ -1532,7 +1604,8 @@ async function showRssiModal(bssid, ssid, meta = {}) {
         Loading…
       </div>
     </div>`;
-  document.body.appendChild(modal);
+  // Append inside the themed root so CSS variables (surface/line/teal) resolve.
+  (document.getElementById("rmRoot") || document.body).appendChild(modal);
   document.getElementById("rmRssiCloseBtn").addEventListener("click", () => modal.remove());
   modal.addEventListener("click", e => { if (e.target === modal) modal.remove(); });
 

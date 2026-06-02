@@ -580,8 +580,11 @@ body {
   height: 10px;
   border-radius: 50%;
 }
-.rm-legend-ap::before     { background: var(--rm-teal); }
-.rm-legend-client::before { background: var(--rm-amber); }
+.rm-graph-legend .rm-legend-ap::before {
+  width: 30px; height: 9px; border-radius: 5px;
+  background: linear-gradient(90deg, #34d399, #fbbf24, #f87171);
+}
+.rm-graph-legend .rm-legend-client::before { background: #fbbf24; }
 
 /* ── Log ────────────────────────────────────────────────────── */
 .rm-log-list { padding: 0; }
@@ -791,12 +794,13 @@ body {
   padding: 1rem;
 }
 .rm-rssi-modal-inner {
-  background: var(--aap-surface-strong);
-  border: 1px solid var(--aap-line);
-  border-radius: 8px;
+  background: var(--aap-surface-strong, #1c1c1c);
+  border: 1px solid var(--aap-line, #333);
+  border-radius: 12px;
   padding: 1.5rem;
   width: 100%;
   max-width: 640px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.55);
 }
 .rm-rssi-modal-header {
   display: flex;
@@ -1166,3 +1170,26 @@ select.rm-ignore-input { max-width: 460px; cursor: pointer; }
   background: color-mix(in srgb, var(--rm-teal) 12%, transparent);
   padding: 0.1rem 0.5rem; border-radius: 999px;
 }
+
+/* ── Graph view controls (topology dropdown) ─────────────────── */
+.rm-graph-controls { display: flex; align-items: center; gap: 0.85rem; }
+.rm-graph-mode {
+  appearance: none; -webkit-appearance: none;
+  background-color: var(--aap-surface);
+  color: var(--aap-text);
+  border: 1px solid var(--aap-line);
+  border-radius: 8px;
+  padding: 0.35rem 1.9rem 0.35rem 0.7rem;
+  font-family: inherit; font-size: 0.8rem;
+  cursor: pointer; line-height: 1.2;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'><path d='M1 1l4 4 4-4' stroke='%239a9794' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  transition: border-color 0.15s ease;
+}
+.rm-graph-mode:hover  { border-color: var(--aap-muted); }
+.rm-graph-mode:focus  { outline: none; border-color: var(--aap-accent, #d9622a); }
+.rm-graph-mode option { background: var(--aap-surface); color: var(--aap-text); }
+
+.rm-graph-legend .rm-legend-gateway::before { background: #5ee1c8; }
+.rm-graph-legend .rm-legend-host::before    { background: #60a5fa; }
