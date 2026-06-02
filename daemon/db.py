@@ -71,7 +71,18 @@ def init(path: str):
             ts    TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS hosts (
+            ip          TEXT PRIMARY KEY,
+            mac         TEXT,
+            vendor      TEXT,
+            hostname    TEXT,
+            method      TEXT,
+            first_seen  TEXT,
+            last_seen   TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_clients_bssid ON clients(bssid);
+        CREATE INDEX IF NOT EXISTS idx_hosts_last ON hosts(last_seen);
         CREATE INDEX IF NOT EXISTS idx_captures_bssid ON captures(bssid);
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
         CREATE INDEX IF NOT EXISTS idx_rssi_bssid_ts ON rssi_history(bssid, ts);
@@ -127,6 +138,35 @@ def upsert_client(path: str, mac: str, bssid: str, rssi: int, vendor: str = ""):
         ) WHERE bssid = ?
     """, (bssid, bssid))
     conn.commit()
+
+
+def upsert_host(path: str, ip: str, mac: str = "", vendor: str = "",
+                hostname: str = "", method: str = "arp") -> bool:
+    """Insert or update a LAN host. Returns True if this IP was newly seen.
+    Non-empty fields never overwrite an existing value with a blank."""
+    now = datetime.utcnow().isoformat()
+    conn = get_conn(path)
+    is_new = conn.execute("SELECT 1 FROM hosts WHERE ip=?", (ip,)).fetchone() is None
+    conn.execute("""
+        INSERT INTO hosts (ip, mac, vendor, hostname, method, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ip) DO UPDATE SET
+            mac      = CASE WHEN excluded.mac      != '' THEN excluded.mac      ELSE hosts.mac      END,
+            vendor   = CASE WHEN excluded.vendor   != '' THEN excluded.vendor   ELSE hosts.vendor   END,
+            hostname = CASE WHEN excluded.hostname != '' THEN excluded.hostname ELSE hosts.hostname END,
+            method   = excluded.method,
+            last_seen = excluded.last_seen
+    """, (ip, mac, vendor, hostname, method, now, now))
+    conn.commit()
+    return is_new
+
+
+def get_hosts(path: str, limit: int = 500) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT * FROM hosts ORDER BY last_seen DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def insert_capture(path: str, filename: str, bssid: str, ssid: str, cap_type: str) -> int:

@@ -638,29 +638,39 @@ function drawGraph(data) {
 
 // ── LAN Hosts ─────────────────────────────────────────────────────────────────
 function viewHosts(rows, _status) {
+  const sorted = [...rows].sort((a, b) => {
+    const an = (a.ip || "").split(".").map(Number);
+    const bn = (b.ip || "").split(".").map(Number);
+    for (let i = 0; i < 4; i++) {
+      if ((an[i] || 0) !== (bn[i] || 0)) return (an[i] || 0) - (bn[i] || 0);
+    }
+    return 0;
+  });
   return `
     <div class="rm-action-bar">
-      <span class="rm-muted">${rows.length} host${rows.length !== 1 ? "s" : ""} in ARP table</span>
+      <span class="rm-muted">${rows.length} host${rows.length !== 1 ? "s" : ""} on the LAN</span>
       <button class="rm-btn rm-btn-primary" id="rmScanBtn">Run nmap scan</button>
     </div>
-    ${rows.length
+    ${sorted.length
       ? `<div class="dash-panel dash-panel-full">
           <div class="dash-table-scroll">
             <table class="dash-table">
-              <thead><tr><th>IP</th><th>MAC</th><th>Vendor</th><th>Method</th></tr></thead>
+              <thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Vendor</th><th>Method</th><th>Last seen</th></tr></thead>
               <tbody>
-                ${rows.map(r => `
+                ${sorted.map(r => `
                   <tr>
                     <td class="rm-mono">${esc(r.ip || "—")}</td>
+                    <td>${esc(r.hostname || "—")}</td>
                     <td class="rm-mono rm-muted">${esc(r.mac || "—")}</td>
                     <td>${esc(r.vendor || "—")}</td>
                     <td><span class="rm-muted">${esc(r.method || "arp")}</span></td>
+                    <td class="rm-muted">${r.last_seen ? shortDate(r.last_seen) : "—"}</td>
                   </tr>`).join("")}
               </tbody>
             </table>
           </div>
         </div>`
-      : empty("🏠", "No LAN hosts in ARP table yet")}`;
+      : empty("🏠", "No LAN hosts discovered yet")}`;
 }
 
 function attachScanHandler() {

@@ -97,7 +97,7 @@ class Radioman:
             model=display_cfg.get("model", "epd2in13_V4"),
             rotate=int(display_cfg.get("rotate", 180)),
         )
-        self.scanner     = NetworkScanner(iface=self._iface)
+        self.scanner     = NetworkScanner(iface=self._iface, on_host=self._on_host)
         self.crack_queue = CrackQueue(crack_cfg, on_cracked=self._on_cracked)
         self.capture     = CaptureEngine(
             config=capture_cfg,
@@ -138,6 +138,19 @@ class Radioman:
             return
         db.upsert_client(self._db_path, mac, bssid, rssi, vendor)
         log.debug("Client: %s → %s  %ddBm  [%s]", mac, bssid or "probe", rssi, vendor or "?")
+
+    def _on_host(self, host):
+        ip = host.get("ip", "")
+        if not ip:
+            return
+        is_new = db.upsert_host(
+            self._db_path, ip,
+            host.get("mac", ""), host.get("vendor", ""),
+            host.get("hostname", ""), host.get("method", "arp"),
+        )
+        if is_new:
+            label = host.get("hostname") or host.get("vendor") or host.get("mac") or ip
+            db.log_event(self._db_path, "info", f"LAN host: {ip} ({label})")
 
     def _on_capture(self, filepath, bssid, ssid, cap_type):
         if bssid and db.is_ignored(self._db_path, bssid):

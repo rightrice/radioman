@@ -125,10 +125,10 @@ def create_app(state: dict) -> Flask:
     def graph():
         return jsonify(_db.get_graph(_db_path()))
 
-    # ── LAN hosts (from scanner) ──────────────────────────────────────────────
+    # ── LAN hosts (persisted; scanner enriches + stores via on_host) ──────────
     @app.route("/api/hosts")
     def hosts():
-        return jsonify(state["scanner"].get_hosts())
+        return jsonify(_db.get_hosts(_db_path()))
 
     @app.route("/api/hosts/scan", methods=["POST"])
     def hosts_scan():
@@ -141,8 +141,8 @@ def create_app(state: dict) -> Flask:
                     target = str(raw)
                 else:
                     return jsonify({"error": "invalid target format"}), 400
-        results = state["scanner"].nmap_scan(target)
-        return jsonify(results)
+        state["scanner"].nmap_scan(target)   # persists via on_host
+        return jsonify(_db.get_hosts(_db_path()))
 
     # ── Events / log ─────────────────────────────────────────────────────────
     @app.route("/api/events")
