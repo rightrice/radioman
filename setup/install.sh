@@ -109,7 +109,7 @@ apt-get install -y -qq libpcap0.8 2>/dev/null || \
 log "Installing security tools..."
 
 # Tools available in both Kali and Ubuntu apt repos
-for tool_pkg in "nmap:nmap" "aircrack-ng:aircrack-ng" "hcxpcapngtool:hcxtools" "hashcat:hashcat"; do
+for tool_pkg in "nmap:nmap" "aircrack-ng:aircrack-ng" "hcxpcapngtool:hcxtools" "hashcat:hashcat" "traceroute:traceroute" "snmpwalk:snmp"; do
   tool="${tool_pkg%%:*}"
   pkg="${tool_pkg##*:}"
   if command -v "$tool" &>/dev/null; then

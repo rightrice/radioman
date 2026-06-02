@@ -170,6 +170,16 @@ def create_app(state: dict) -> Flask:
     def hosts_scanstatus():
         return jsonify(state["scanner"].scan_status())
 
+    # ── L3 / VLAN topology (traceroute + SNMP) ────────────────────────────────
+    @app.route("/api/topology")
+    def topology():
+        return jsonify(state["topology"].get())
+
+    @app.route("/api/topology/scan", methods=["POST"])
+    def topology_scan():
+        started = state["topology"].start_scan()
+        return jsonify({"started": started, **state["topology"].scan_status()})
+
     # ── Events / log ─────────────────────────────────────────────────────────
     @app.route("/api/events")
     def events():
@@ -318,10 +328,13 @@ def create_app(state: dict) -> Flask:
     @app.route("/api/settings")
     def get_settings():
         return jsonify({
-            "scan_target": state.get("scan_target", ""),
-            "my_bssid":    state.get("my_bssid", ""),
-            "my_ssid":     state.get("my_ssid", ""),
-            "iface":       state.get("iface", "wlan0"),
+            "scan_target":    state.get("scan_target", ""),
+            "my_bssid":       state.get("my_bssid", ""),
+            "my_ssid":        state.get("my_ssid", ""),
+            "iface":          state.get("iface", "wlan0"),
+            "snmp_community": state.get("snmp_community", ""),
+            "snmp_target":    state.get("snmp_target", ""),
+            "snmp_version":   state.get("snmp_version", "2c"),
         })
 
     @app.route("/api/settings", methods=["POST"])
@@ -330,17 +343,29 @@ def create_app(state: dict) -> Flask:
         scan_target = str(data.get("scan_target", "")).strip()
         my_bssid    = str(data.get("my_bssid", "")).strip().upper()
         my_ssid     = str(data.get("my_ssid", "")).strip()[:64]
+        snmp_comm   = str(data.get("snmp_community", "")).strip()[:64]
+        snmp_target = str(data.get("snmp_target", "")).strip()
+        snmp_ver    = str(data.get("snmp_version", "2c")).strip() or "2c"
 
         if scan_target and not re.fullmatch(r"[\w.\-/]+", scan_target):
             return jsonify({"error": "Invalid scan target (use IP or CIDR, e.g. 192.168.1.0/24)"}), 400
         if my_bssid and not re.fullmatch(r"[0-9A-F:]{17}", my_bssid):
             return jsonify({"error": "Invalid BSSID (use AA:BB:CC:DD:EE:FF)"}), 400
+        if snmp_target and not re.fullmatch(r"[\w.\-]+", snmp_target):
+            return jsonify({"error": "Invalid SNMP target (use an IP or hostname)"}), 400
+        if snmp_ver not in ("1", "2c"):
+            snmp_ver = "2c"
 
-        state["scan_target"] = scan_target
-        state["my_bssid"]    = my_bssid
-        state["my_ssid"]     = my_ssid
+        state["scan_target"]    = scan_target
+        state["my_bssid"]       = my_bssid
+        state["my_ssid"]        = my_ssid
+        state["snmp_community"] = snmp_comm
+        state["snmp_target"]    = snmp_target
+        state["snmp_version"]   = snmp_ver
         state["scanner"].set_target(scan_target)
+        state["topology"].set_snmp(snmp_comm, snmp_target, snmp_ver)
         _save_conf("scan", {"target": scan_target, "my_bssid": my_bssid, "my_ssid": my_ssid})
+        _save_conf("snmp", {"community": snmp_comm, "target": snmp_target, "version": snmp_ver})
         return jsonify({"saved": True, "scan_target": scan_target,
                         "my_bssid": my_bssid, "my_ssid": my_ssid})
 

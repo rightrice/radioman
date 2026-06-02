@@ -1193,3 +1193,8 @@ select.rm-ignore-input { max-width: 460px; cursor: pointer; }
 
 .rm-graph-legend .rm-legend-gateway::before { background: #5ee1c8; }
 .rm-graph-legend .rm-legend-host::before    { background: #60a5fa; }
+
+/* ── L3 topology legend + controls ───────────────────────────── */
+.rm-graph-legend .rm-legend-router::before { background: #fb923c; }
+.rm-graph-legend .rm-legend-subnet::before { background: #a78bfa; }
+.rm-graph-discover { padding: 0.35rem 0.8rem; font-size: 0.78rem; }

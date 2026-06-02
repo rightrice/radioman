@@ -23,6 +23,7 @@ from capture import CaptureEngine
 from cracker import CrackQueue, CrackJob
 from scanner import NetworkScanner
 from wifiscan import WifiScanner
+from topology import TopologyMapper
 from xplt import XpltSync
 from ai import AIEngine
 from api import create_app
@@ -67,10 +68,14 @@ class Radioman:
         xplt_cfg    = flat(cfg, "xplt")
         wifiscan_cfg = flat(cfg, "wifiscan")
         scan_cfg    = flat(cfg, "scan")
+        snmp_cfg    = flat(cfg, "snmp")
 
         self._scan_target = scan_cfg.get("target", "").strip()
         self._my_bssid    = scan_cfg.get("my_bssid", "").strip().upper()
         self._my_ssid     = scan_cfg.get("my_ssid", "").strip()
+        self._snmp_community = snmp_cfg.get("community", "").strip()
+        self._snmp_target    = snmp_cfg.get("target", "").strip()
+        self._snmp_version   = snmp_cfg.get("version", "2c").strip() or "2c"
 
         self._iface       = main_cfg.get("interface", "wlan0")
         self._web_port    = int(main_cfg.get("web_port", 8080))
@@ -126,6 +131,14 @@ class Radioman:
             vendor_lookup=self.scanner._vendor_for,
         )
 
+        # L3 / VLAN topology mapper (traceroute + optional SNMP).
+        self.topology = TopologyMapper(
+            iface=self._iface, db_path=self._db_path,
+            snmp_community=self._snmp_community,
+            snmp_target=self._snmp_target,
+            snmp_version=self._snmp_version,
+        )
+
         self._state = {
             "db_path":      self._db_path,
             "conf_path":    self._conf_path,
@@ -134,6 +147,9 @@ class Radioman:
             "scan_target":  self._scan_target,
             "my_bssid":     self._my_bssid,
             "my_ssid":      self._my_ssid,
+            "snmp_community": self._snmp_community,
+            "snmp_target":  self._snmp_target,
+            "snmp_version": self._snmp_version,
             "personality": self.personality,
             "battery":    bat.read,
             "scanner":    self.scanner,
@@ -141,6 +157,7 @@ class Radioman:
             "crack_queue": self.crack_queue,
             "xplt_sync":  self.xplt_sync,
             "ai":         self.ai,
+            "topology":   self.topology,
         }
 
         self._running = False

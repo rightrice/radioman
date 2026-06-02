@@ -94,7 +94,9 @@ async function fetchViewData() {
     case "networks":  return get("/api/networks");
     case "clients":   return get("/api/clients");
     case "captures":  return get("/api/captures");
-    case "graph":     return graphMode === "lan" ? get("/api/hosts") : get("/api/graph");
+    case "graph":     return graphMode === "lan" ? get("/api/hosts")
+                           : graphMode === "l3"  ? get("/api/topology")
+                           : get("/api/graph");
     case "hosts":     return Promise.all([get("/api/hosts"), get("/api/hosts/scanstatus")]);
     case "log":       return get("/api/events?limit=100");
     case "ignore":    return get("/api/ignore");
@@ -146,8 +148,10 @@ function renderMain(status, data, xplt = null) {
       // selection + layout persist).
       if (!document.getElementById("rmGraphCanvas")) main.innerHTML = viewGraph();
       attachGraphControls();
-      const gdata = graphMode === "lan" ? hostsToGraph(data || []) : (data || { nodes: [], edges: [] });
+      const gdata = graphMode === "lan" ? hostsToGraph(data || [])
+                  : (data || { nodes: [], edges: [] });   // wifi + l3 are already {nodes,edges}
       drawGraph(gdata);
+      syncTopoUI(graphMode === "l3" ? data : null);
       break;
     }
     case "hosts": {
@@ -548,9 +552,11 @@ function attachCrackHandlers() {
 
 // ── Graph ─────────────────────────────────────────────────────────────────────
 function graphLegendHtml() {
-  return graphMode === "lan"
-    ? `<span class="rm-legend-gateway">Gateway / Router</span><span class="rm-legend-host">Hosts</span>`
-    : `<span class="rm-legend-ap">APs — low → high congestion</span><span class="rm-legend-client">Clients</span>`;
+  if (graphMode === "lan")
+    return `<span class="rm-legend-gateway">Gateway / Router</span><span class="rm-legend-host">Hosts</span>`;
+  if (graphMode === "l3")
+    return `<span class="rm-legend-gateway">Gateway / L3</span><span class="rm-legend-router">Routers</span><span class="rm-legend-subnet">Subnets / VLANs</span><span class="rm-legend-host">Hosts</span>`;
+  return `<span class="rm-legend-ap">APs — low → high congestion</span><span class="rm-legend-client">Clients</span>`;
 }
 
 function viewGraph() {
@@ -562,8 +568,10 @@ function viewGraph() {
           <select class="rm-graph-mode" id="rmGraphMode" aria-label="Graph view">
             <option value="wifi" ${graphMode === "wifi" ? "selected" : ""}>WiFi Topology — APs &amp; clients</option>
             <option value="lan"  ${graphMode === "lan"  ? "selected" : ""}>LAN Topology — hosts</option>
+            <option value="l3"   ${graphMode === "l3"   ? "selected" : ""}>L3 Topology — routers, subnets, VLANs</option>
           </select>
-          <span class="rm-muted" style="font-size:0.72rem">click a node for details</span>
+          <button class="rm-btn rm-btn-primary rm-graph-discover" id="rmTopoBtn" style="display:none">Discover L3 / VLANs</button>
+          <span class="rm-muted rm-topo-note" id="rmTopoNote" style="font-size:0.72rem">click a node for details</span>
         </div>
       </div>
       <div class="rm-graph-wrap">
@@ -603,8 +611,42 @@ function attachGraphControls() {
       graphPositions = {}; graphSelected = null; updateGraphInfo(null);
       const legend = document.getElementById("rmGraphLegend");
       if (legend) legend.innerHTML = graphLegendHtml();
+      syncTopoUI(null);
       poll();   // re-fetch with the new data source
     });
+  }
+  const btn = document.getElementById("rmTopoBtn");
+  if (btn && !btn._rmBound) {
+    btn._rmBound = true;
+    btn.addEventListener("click", async () => {
+      btn.disabled = true; btn.textContent = "Discovering… ⟳";
+      try { await post("/api/topology/scan"); setTimeout(poll, 800); }
+      catch (e) { btn.disabled = false; btn.textContent = "Discover L3 / VLANs"; }
+    });
+  }
+}
+
+function syncTopoUI(topoData) {
+  const btn  = document.getElementById("rmTopoBtn");
+  const note = document.getElementById("rmTopoNote");
+  if (!btn) return;
+  if (graphMode !== "l3") {
+    btn.style.display = "none";
+    if (note) note.textContent = "click a node for details";
+    return;
+  }
+  btn.style.display = "";
+  const scan = (topoData && topoData.scan) || {};
+  const meta = (topoData && topoData.meta) || {};
+  btn.disabled = !!scan.scanning;
+  btn.textContent = scan.scanning ? "Discovering… ⟳" : "Discover L3 / VLANs";
+  if (note) {
+    const bits = [];
+    if (scan.last_error)       bits.push(scan.last_error);
+    else if (meta.note)        bits.push(meta.note);
+    if (meta.vlans && meta.vlans.length)     bits.push(`${meta.vlans.length} VLANs`);
+    if (meta.subnets && meta.subnets.length) bits.push(`${meta.subnets.length} subnets`);
+    note.textContent = bits.join(" · ") || "click a node for details";
   }
 }
 
@@ -736,16 +778,18 @@ function graphRender() {
     ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
   });
 
+  const NODE_COLORS = {
+    gateway: "#5ee1c8", host: "#60a5fa", router: "#fb923c",
+    subnet: "#a78bfa", internet: "#94a3b8", self: "#34d399", switch: "#38bdf8",
+  };
+  const BIG_TYPES = ["ap", "gateway", "router", "subnet", "self", "internet", "switch"];
   graphNodes.forEach(n => {
     const p = P[n.id]; if (!p) return;
     const sel = n.id === graphSelected;
-    const big = n.type === "ap" || n.type === "gateway";
-    const r   = (n.type === "gateway" ? 10 : big ? 8 : 5) + (sel ? 3 : 0);
-    let fill;
-    if (n.type === "ap")           fill = heatColor(graphHeat[n.id] ?? 0);
-    else if (n.type === "gateway") fill = "#5ee1c8";
-    else if (n.type === "host")    fill = "#60a5fa";
-    else                           fill = cliColor;   // client
+    const big = BIG_TYPES.includes(n.type);
+    const r   = ((n.type === "gateway" || n.type === "self") ? 10 : big ? 8 : 5) + (sel ? 3 : 0);
+    const fill = n.type === "ap" ? heatColor(graphHeat[n.id] ?? 0)
+               : (NODE_COLORS[n.type] || cliColor);
     ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
     ctx.fillStyle   = fill;
     ctx.shadowColor = fill; ctx.shadowBlur = sel ? 16 : 6;
@@ -789,11 +833,22 @@ function updateGraphInfo(node) {
          + row("Signal", node.rssi != null ? node.rssi + " dBm" : "—")
          + row("Security", esc(node.security || "—"))
          + row("Clients", node.clients ?? 0);
+  } else if (node.type === "subnet") {
+    body = row("Subnet", mono(node.cidr))
+         + (node.vlan ? row("VLAN", esc(node.vlan + (node.vlan_name ? ` (${node.vlan_name})` : ""))) : "")
+         + (node.ifname ? row("Interface", esc(node.ifname)) : "");
+  } else if (node.type === "router") {
+    body = row("IP", mono(node.ip)) + row("Role", "L3 hop / router");
+  } else if (node.type === "internet") {
+    body = row("", "Internet / WAN edge");
+  } else if (node.type === "self") {
+    body = row("Device", "radioman (this Pi)");
   } else if (node.type === "gateway" || node.type === "host") {
-    body = row("IP", mono(node.ip))
-         + row("MAC", mono(node.mac))
-         + row("Vendor", esc(node.vendor || "—"))
-         + row("Hostname", esc(node.hostname || "—"));
+    body = row("IP", mono(node.ip));
+    if (node.mac)      body += row("MAC", mono(node.mac));
+    if (node.vendor)   body += row("Vendor", esc(node.vendor));
+    if (node.hostname) body += row("Hostname", esc(node.hostname));
+    if (node.sysdescr) body += row("System", esc(String(node.sysdescr).slice(0, 70)));
   } else {
     body = row("MAC", mono(node.id))
          + row("Signal", node.rssi != null ? node.rssi + " dBm" : "—")
@@ -1987,7 +2042,24 @@ function viewSettings(settings, wifi, nets) {
             </select>
             <div class="rm-muted" style="font-size:0.72rem">Highlighted as &ldquo;yours&rdquo; in the Networks &amp; channel views.</div>
           </div>
-          <div style="margin-top:1rem">
+
+          <div class="rm-setting-label" style="margin-top:1.5rem">L3 / VLAN topology (SNMP)</div>
+          <div class="rm-muted" style="font-size:0.72rem;margin-bottom:0.5rem;max-width:520px">
+            Optional. A read-only SNMP community lets the L3 Topology view map subnets, VLANs and
+            cross-VLAN ARP from a managed gateway / switch. Leave blank for traceroute-only topology.
+          </div>
+          <div class="rm-setting-form">
+            <input class="rm-ignore-input" id="rmSnmpCommunity" type="password" placeholder="Community (e.g. public)"
+                   maxlength="64" autocomplete="off" value="${esc(settings.snmp_community || "")}" />
+            <input class="rm-ignore-input rm-mono" id="rmSnmpTarget" placeholder="Target IP (blank = gateway)"
+                   maxlength="64" autocomplete="off" value="${esc(settings.snmp_target || "")}" />
+            <select class="rm-ignore-input" id="rmSnmpVersion" style="flex:0 0 auto">
+              <option value="2c" ${(settings.snmp_version || "2c") === "2c" ? "selected" : ""}>v2c</option>
+              <option value="1"  ${settings.snmp_version === "1" ? "selected" : ""}>v1</option>
+            </select>
+          </div>
+
+          <div style="margin-top:1.25rem">
             <button class="rm-btn rm-btn-primary" id="rmSettingsSaveBtn">Save settings</button>
             <span id="rmSettingsMsg" class="rm-muted" style="margin-left:0.75rem;font-size:0.78rem"></span>
           </div>
@@ -2028,9 +2100,13 @@ function attachSettingsHandlers() {
     const sel = document.getElementById("rmMyBssid");
     const my_bssid = sel?.value || "";
     const my_ssid  = sel?.selectedOptions?.[0]?.dataset?.ssid || "";
+    const snmp_community = document.getElementById("rmSnmpCommunity")?.value || "";
+    const snmp_target    = document.getElementById("rmSnmpTarget")?.value.trim() || "";
+    const snmp_version   = document.getElementById("rmSnmpVersion")?.value || "2c";
     const msg = document.getElementById("rmSettingsMsg");
     try {
-      const r = await post("/api/settings", { scan_target, my_bssid, my_ssid });
+      const r = await post("/api/settings", {
+        scan_target, my_bssid, my_ssid, snmp_community, snmp_target, snmp_version });
       if (msg) {
         msg.textContent = r.error || "Saved ✓";
         msg.style.color = r.error ? "var(--rm-red)" : "";

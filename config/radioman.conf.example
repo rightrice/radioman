@@ -52,6 +52,17 @@ target =
 my_bssid =
 my_ssid =
 
+[snmp]
+# Optional — for the L3 / VLAN topology view (Graph → "L3 Topology").
+# Read-only SNMP walk of a managed gateway / L3 switch reveals subnets, the
+# VLAN database and cross-VLAN ARP. Editable in the dashboard Settings.
+# Leave community blank to disable SNMP (traceroute-only topology still works).
+community =
+# Target to query; blank = the default gateway.
+target =
+# SNMP version: 1 or 2c
+version = 2c
+
 [cracker]
 # Path to wordlist
 wordlist = /opt/radioman/wordlists/rockyou.txt
