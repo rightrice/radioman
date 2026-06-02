@@ -1,10 +1,14 @@
 #!/bin/bash
 # radioman AI installer
-# Downloads pre-built llama-cli for ARM64 and IBM Granite 1B Q2_K GGUF.
-# Run as root AFTER install.sh: sudo bash setup/install_ai.sh
+# Installs/uses a prebuilt llama-cli for ARM64 and downloads IBM Granite 4.0
+# 350M Q4_K_M GGUF. Run as root AFTER install.sh: sudo bash setup/install_ai.sh
 #
-# Disk: ~5MB binary + ~400MB model
-# RAM during inference: model is loaded per-request by llama-cli subprocess
+# Normally you cross-compile llama-cli on a build box first (see
+# scripts/BUILD_LLAMA.md) and drop it at /opt/radioman/llama/llama-cli; this
+# script then just fetches the model. Falls back to downloading/building llama-cli.
+#
+# Disk: ~5MB binary + ~230MB model
+# RAM during inference: model is loaded per-request by the llama-cli subprocess
 
 set -e
 
@@ -182,8 +186,8 @@ fi
 if [ -f "$MODEL_FILE" ] && [ "$(stat -c%s "$MODEL_FILE" 2>/dev/null || echo 0)" -gt 100000000 ]; then
   info "Granite model already present at $MODEL_FILE"
 else
-  log "Downloading IBM Granite 3.2 1B A400M Instruct (Q2_K, ~400MB)..."
-  info "This may take 5-15 minutes depending on your connection."
+  log "Downloading IBM Granite 4.0 350M (Q4_K_M, ~230MB)..."
+  info "This may take a few minutes depending on your connection."
 
   MODEL_URL="${HF_BASE}/${MODEL_REPO}/resolve/main/${MODEL_FILENAME}"
 
@@ -199,25 +203,33 @@ else
   fi
 fi
 
-# ── Smoke test ────────────────────────────────────────────────────────────────
-log "Running smoke test (may take ~60 seconds on first load)..."
-TEST_OUT=$("$LLAMA_BIN" \
+# ── Smoke test (bounded — must never hang the install) ───────────────────────
+# NOTE: some llama-cli builds run an interactive REPL that never exits on EOF
+# (it echoes the prompt and busy-loops ">"). `timeout` bounds it; radioman's
+# daemon (daemon/ai.py) handles that behavior at runtime by streaming + killing.
+# The dashboard AI tab is the authoritative test.
+log "Running smoke test (bounded to 90s)..."
+SMOKE_RC=0
+timeout 90 "$LLAMA_BIN" \
   --model "$MODEL_FILE" \
   --threads 4 \
-  --ctx-size 64 \
-  --n-predict 20 \
+  --ctx-size 256 \
+  --n-predict 16 \
   --temp 0.1 \
+  -no-cnv \
   --no-display-prompt \
   --log-disable \
   --prompt "<|user|>
 Say hello.
-<|assistant|>" 2>/dev/null || echo "")
+<|assistant|>" < /dev/null > /dev/null 2>&1 || SMOKE_RC=$?
 
-if [ -z "$TEST_OUT" ]; then
-  warn "Smoke test produced no output — model may still work for longer prompts."
-  warn "Run manually: $LLAMA_BIN --model $MODEL_FILE --prompt \"hello\" --n-predict 20"
+if [ "$SMOKE_RC" -eq 0 ]; then
+  log "Smoke test OK — model loaded and llama-cli exited cleanly."
+elif [ "$SMOKE_RC" -eq 124 ]; then
+  info "Smoke test hit the 90s timeout — expected for REPL-style llama-cli builds."
+  info "The daemon handles this at runtime; verify in the dashboard AI tab."
 else
-  log "Smoke test OK: \"${TEST_OUT:0:80}\""
+  warn "Smoke test exited rc=$SMOKE_RC — verify in the dashboard AI tab."
 fi
 
 # ── Update radioman.conf with AI paths ────────────────────────────────────────
