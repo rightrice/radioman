@@ -153,7 +153,7 @@ fi
 # Accept "user@host" directly, else default the user (override: SSH_USER=...).
 case "$ZERO_ADDR" in
   *@*) SSH_TARGET="$ZERO_ADDR" ;;
-  *)   SSH_TARGET="${SSH_USER:-rightrice}@${ZERO_ADDR}" ;;
+  *)   SSH_TARGET="${SSH_USER:-ubuntu}@${ZERO_ADDR}" ;;
 esac
 
 echo ""
