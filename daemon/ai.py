@@ -182,6 +182,7 @@ class AIEngine:
             "--temp",           "0.7",
             "--top-p",          "0.9",
             "--repeat-penalty", "1.1",
+            "-no-cnv",            # one-shot completion — NOT interactive chat mode
             "--no-display-prompt",
             "--log-disable",
             "--prompt",         prompt,
@@ -194,6 +195,7 @@ class AIEngine:
                 capture_output=True,
                 text=True,
                 timeout=TIMEOUT,
+                stdin=subprocess.DEVNULL,   # never block waiting for interactive input
             )
             out = result.stdout
             if out.startswith(prompt):
