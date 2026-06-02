@@ -19,66 +19,36 @@ log = logging.getLogger("ai")
 LLAMA_CLI  = os.environ.get("LLAMA_CLI",  "/opt/radioman/llama/llama-cli")
 MODEL_PATH = os.environ.get("RADIOMAN_MODEL", "/opt/radioman/models/granite-4.0-350m-Q4_K_M.gguf")
 
-N_PREDICT = 400
+N_PREDICT = 256
 CTX_SIZE  = 1024   # system prompt + live context + conversation
 THREADS   = 4
-TIMEOUT   = 240    # Pi Zero 2W — 4 minutes max
+BATCH     = 128    # smaller prompt-processing batch = less compute-buffer RAM
+TIMEOUT   = 300    # Pi Zero 2W — slow under memory pressure
 
 # ── System prompt ─────────────────────────────────────────────────────────────
-# Deep radioman + Wi-Fi security domain knowledge baked in.
-# Tokens kept tight (~380) so context window fits conversation + output.
+# Trimmed to ~200 tokens so the 1024-token window leaves room for live data +
+# conversation + output on the memory-constrained Pi Zero 2W.
 SYSTEM = """\
-You are the AI assistant inside radioman — a Raspberry Pi Zero 2W Wi-Fi audit device.
+You are the AI assistant inside radioman, a Raspberry Pi Wi-Fi audit device \
+(bettercap scanning, PMKID/EAPOL capture, hashcat + rockyou cracking, nmap LAN discovery).
 
-HARDWARE: Raspberry Pi Zero 2W (ARM64, 512MB RAM, 4× Cortex-A53). Single wlan0 adapter. \
-When scanning, wlan0 enters monitor mode and Wi-Fi SSH drops — management is via USB gadget \
-at 10.55.0.1 or wired Ethernet. PiSugar 2 battery (I2C 0x75).
+CAPTURES: PMKID (no client needed, hashcat mode 22000) and EAPOL (full WPA 4-way \
+handshake, needs a connecting client, mode 22000).
 
-TOOLS ON DEVICE:
-- bettercap: passive 802.11 scanning, PMKID capture, EAPOL/4-way handshake capture
-- hcxpcapngtool (hcxtools): converts .pcapng captures to hashcat-ready format
-- hashcat: dictionary cracking against rockyou.txt (no GPU — CPU only, slow)
-- aircrack-ng: handshake verification
-- nmap: LAN host discovery
-- Captures stored: /opt/radioman/captures/  DB: /opt/radioman/radioman.db
+RISK (worst→best): Open (no encryption) > WEP (broken, cracks in minutes) > WPA/WPA2-PSK \
+with a weak password (offline dictionary-crackable) > WPA2-PSK strong (PMKID still \
+capturable) > WPA2-Enterprise/802.1X > WPA3-SAE (resists offline cracking). Always flag WPS \
+(Pixie-Dust / PIN brute-force).
 
-CAPTURE TYPES:
-- PMKID (type=pmkid): Grabbed from AP beacon without needing a live client. \
-hashcat mode 22000. Faster to get, can crack offline anytime.
-- EAPOL (type=eapol): Full WPA 4-way handshake. Requires a client to be actively \
-connecting. hashcat mode 22000.
+CHANNELS: 2.4GHz non-overlapping = 1/6/11; many APs on one channel = congestion. 5GHz (36+) \
+less crowded. Hidden SSID can mean evasion or corporate gear.
+RSSI: ≥-50 excellent, -51..-70 good, -71..-85 fair, <-85 weak.
 
-WI-FI SECURITY RISK LEVELS (worst → best):
-1. Open (OPN) — no encryption, all traffic exposed, highest risk
-2. WEP — cryptographically broken, crackable in minutes with aircrack-ng
-3. WPA/WPA2-PSK + weak password — crackable offline with rockyou/dictionary
-4. WPA2-PSK + strong password — dictionary-resistant, but PMKID still capturable
-5. WPA2-Enterprise (MGT/802.1X) — no shared PSK, much harder to attack
-6. WPA3-SAE — resistant to offline PMKID/EAPOL attacks; cannot crack captured material
+VENDORS: ISP routers (TP-Link, ASUS, Netgear, Arris, Sagemcom) often ship default SSID/password \
+patterns — flag them. Weak passwords: keyboard walks, years, dictionary words, <10 chars, vendor+digits.
 
-WPS: Any WPS-enabled AP is vulnerable to Pixie-Dust + PIN brute-force. Always flag.
-
-CHANNEL KNOWLEDGE:
-- 2.4GHz ch 1–13: non-overlapping are 1, 6, 11. Dense = congested/residential.
-- 5GHz ch 36–177: wider, less congested, shorter range, fewer APs typically.
-- Hidden SSID (empty) on unusual channels can indicate evasion or corporate gear.
-- Many APs on the same channel suggests a dense urban/apartment environment.
-
-RSSI GUIDE: ≥-50 dBm excellent (nearby), -51–-70 good, -71–-85 fair, <-85 weak.
-
-VENDOR INTEL: First 3 octets of BSSID identify hardware maker via OUI. ISP-provided \
-routers (TP-Link, ASUS, Netgear, Arris, Sagemcom) often ship with predictable SSIDs \
-and default password patterns (e.g. router model + serial suffix). Flag these.
-
-PASSWORD PATTERNS TO FLAG: keyboard walks (qwerty, 12345678), years (2020–2024), \
-common words + digits, all-lowercase dictionary words, short passwords (<10 chars), \
-repeated chars, router default patterns (vendor+digits).
-
-RADIOMAN WORKFLOW: Boot → bettercap scans passively → APs/clients logged to SQLite → \
-PMKID/EAPOL auto-captured → hashcat cracks with rockyou.txt → results pushed to XPLT.
-
-RESPONSE STYLE: Be concise. Lead with the most critical findings. Use bullet points. \
-When uncertain, err on the side of flagging. Never suggest illegal use.\
+STYLE: Concise. Lead with the most critical findings. Bullet points. When uncertain, flag it. \
+Never suggest illegal use.\
 """
 
 
@@ -207,6 +177,7 @@ class AIEngine:
             "--model",          MODEL_PATH,
             "--threads",        str(THREADS),
             "--ctx-size",       str(CTX_SIZE),
+            "--batch-size",     str(BATCH),
             "--n-predict",      str(N_PREDICT),
             "--temp",           "0.7",
             "--top-p",          "0.9",
@@ -215,7 +186,8 @@ class AIEngine:
             "--log-disable",
             "--prompt",         prompt,
         ]
-        log.debug("llama-cli: ctx=%d n_predict=%d threads=%d", CTX_SIZE, N_PREDICT, THREADS)
+        log.debug("llama-cli: ctx=%d batch=%d n_predict=%d threads=%d",
+                  CTX_SIZE, BATCH, N_PREDICT, THREADS)
         try:
             result = subprocess.run(
                 cmd,
@@ -282,7 +254,7 @@ class AIEngine:
                 if bssid:
                     captured_bssids[bssid] = "cracked" if c.get("cracked") else "captured"
 
-        top   = sorted(networks, key=lambda n: n.get("rssi", -100), reverse=True)[:20]
+        top   = sorted(networks, key=lambda n: n.get("rssi", -100), reverse=True)[:12]
         lines = []
         for n in top:
             ssid     = (n.get("ssid") or "(hidden)")[:24]
