@@ -906,6 +906,14 @@ function viewStats(networks) {
           <canvas id="rmChannelChart24" class="rm-chart-canvas rm-chart-tall"></canvas>
           <div class="rm-chart-legend" id="rmChannelLegend24"></div>
         </div>
+      </div>
+      <div class="dash-panel rm-chart-panel rm-chart-full">
+        <div class="dash-panel-header"><h3>2.4 GHz Channel Congestion</h3>
+          <span class="rm-mono rm-reco" id="rmReco24"></span>
+        </div>
+        <div class="rm-chart-wrap">
+          <canvas id="rmCongestion24" class="rm-chart-canvas"></canvas>
+        </div>
       </div>` : ""}
       ${has5 ? `
       <div class="dash-panel rm-chart-panel rm-chart-full">
@@ -913,6 +921,14 @@ function viewStats(networks) {
         <div class="rm-chart-wrap">
           <canvas id="rmChannelChart5" class="rm-chart-canvas rm-chart-tall"></canvas>
           <div class="rm-chart-legend" id="rmChannelLegend5"></div>
+        </div>
+      </div>
+      <div class="dash-panel rm-chart-panel rm-chart-full">
+        <div class="dash-panel-header"><h3>5 GHz Channel Congestion</h3>
+          <span class="rm-mono rm-reco" id="rmReco5"></span>
+        </div>
+        <div class="rm-chart-wrap">
+          <canvas id="rmCongestion5" class="rm-chart-canvas"></canvas>
         </div>
       </div>` : ""}
       <div class="dash-panel rm-chart-panel">
@@ -957,6 +973,108 @@ function drawAllCharts(networks, statsData) {
   if (ctxSec) drawDonutChart(ctxSec, statsData.security || {}, textClr);
   if (ctxRss) drawRssiHistogram(ctxRss, networks, textClr, lineClr);
   if (ctxVnd) drawVendorChart(ctxVnd, statsData.vendors || [], textClr);
+
+  const ctxCon24 = document.getElementById("rmCongestion24");
+  const ctxCon5  = document.getElementById("rmCongestion5");
+  if (ctxCon24 && nets24.length) drawCongestion(ctxCon24, nets24, "2.4", textClr, lineClr, "rmReco24");
+  if (ctxCon5  && nets5.length)  drawCongestion(ctxCon5,  nets5,  "5",   textClr, lineClr, "rmReco5");
+}
+
+// ── Channel congestion (WiFiman "best channel" recommendation) ────────────────
+const CH24_RECO = [1, 6, 11];                          // non-overlapping 2.4 GHz
+const CH5_STD   = [36, 40, 44, 48, 149, 153, 157, 161]; // common UNII-1/3 channels
+
+// Signal weight: a strong AP interferes more than a weak one.
+// -30 dBm → 1.0, -95 dBm → ~0.0
+function sigWeight(rssi) {
+  return Math.max(0.1, Math.min(1, ((rssi ?? -90) + 95) / 65));
+}
+
+// Returns { bars:[{ch,score}], best } — congestion score per channel,
+// accounting for adjacent-channel overlap, weighted by signal strength.
+function channelCongestion(nets, band) {
+  if (band === "2.4") {
+    const aps = nets.filter(n => n.channel >= 1 && n.channel <= 14);
+    const overlap = d => Math.max(0, 1 - d / 5);   // 20 MHz spans ~±4 channels
+    const bars = [];
+    for (let c = 1; c <= 13; c++) {
+      bars.push({ ch: c, score: aps.reduce(
+        (s, n) => s + sigWeight(n.rssi) * overlap(Math.abs(c - n.channel)), 0) });
+    }
+    let best = CH24_RECO[0], bestScore = Infinity;
+    CH24_RECO.forEach(c => {
+      const b = bars.find(x => x.ch === c);
+      if (b && b.score < bestScore) { bestScore = b.score; best = c; }
+    });
+    return { bars, best };
+  }
+  const aps      = nets.filter(n => n.channel >= 36);
+  const observed = [...new Set(aps.map(n => n.channel))];
+  const cand     = [...new Set([...CH5_STD, ...observed])].sort((a, b) => a - b);
+  const overlap  = d => (d === 0 ? 1 : d <= 2 ? 0.3 : 0); // mostly non-overlapping
+  const bars = cand.map(c => ({ ch: c, score: aps.reduce(
+    (s, n) => s + sigWeight(n.rssi) * overlap(Math.abs(c - n.channel)), 0) }));
+  // Recommend among standard channels when any are in range, else any candidate.
+  const pool = CH5_STD.filter(c => cand.includes(c));
+  let best = (pool[0] ?? cand[0]), bestScore = Infinity;
+  (pool.length ? pool : cand).forEach(c => {
+    const b = bars.find(x => x.ch === c);
+    if (b && b.score < bestScore) { bestScore = b.score; best = c; }
+  });
+  return { bars, best };
+}
+
+function drawCongestion(canvas, nets, band, textClr, lineClr, recoElId) {
+  const { W, H, ctx } = _fitCanvas(canvas);
+  const mg = { top: 14, right: 14, bottom: 28, left: 30 };
+  const pW = W - mg.left - mg.right;
+  const pH = H - mg.top  - mg.bottom;
+  ctx.clearRect(0, 0, W, H);
+
+  const { bars, best } = channelCongestion(nets, band);
+  const maxScore = Math.max(1, ...bars.map(b => b.score));
+  const barW = pW / bars.length;
+
+  // gridlines
+  ctx.strokeStyle = lineClr; ctx.lineWidth = 1;
+  [0.5, 1].forEach(f => {
+    const y = mg.top + pH - f * pH;
+    ctx.beginPath(); ctx.moveTo(mg.left, y); ctx.lineTo(mg.left + pW, y); ctx.stroke();
+  });
+
+  bars.forEach((b, i) => {
+    const norm = b.score / maxScore;
+    const bh   = norm * pH;
+    const x    = mg.left + i * barW + barW * 0.12;
+    const bw   = barW * 0.76;
+    const y    = mg.top + pH - bh;
+    const isBest = b.ch === best;
+
+    // green (clear) → red (congested)
+    const t  = norm;
+    const r  = Math.round(52  + (248 - 52)  * t);
+    const g  = Math.round(211 + (113 - 211) * t);
+    const bl = Math.round(153 + (113 - 153) * t);
+    ctx.fillStyle = isBest ? "#5ee1c8" : `rgb(${r},${g},${bl})`;
+    if (bh > 0) ctx.fillRect(x, y, bw, bh);
+
+    // highlight the recommended channel slot
+    if (isBest) {
+      ctx.strokeStyle = "#5ee1c8"; ctx.lineWidth = 1.5;
+      ctx.strokeRect(mg.left + i * barW + 1, mg.top, barW - 2, pH);
+    }
+
+    const showLabel = band === "2.4" || bars.length <= 14 || i % 2 === 0;
+    if (showLabel) {
+      ctx.fillStyle = isBest ? "#5ee1c8" : textClr;
+      ctx.font      = isBest ? "bold 9px ui-monospace,monospace" : "9px ui-monospace,monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(String(b.ch), x + bw / 2, mg.top + pH + 14);
+    }
+  });
+
+  const recoEl = document.getElementById(recoElId);
+  if (recoEl) recoEl.textContent = bars.length ? `Recommended: channel ${best}` : "no data";
 }
 
 function _fitCanvas(canvas) {

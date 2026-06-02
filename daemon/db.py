@@ -101,9 +101,11 @@ def init(path: str):
 
 
 def upsert_network(path: str, bssid: str, ssid: str, channel: int,
-                   rssi: int, security: str, vendor: str = ""):
+                   rssi: int, security: str, vendor: str = "") -> bool:
+    """Insert or update an AP. Returns True if this BSSID was newly seen."""
     now = datetime.utcnow().isoformat()
     conn = get_conn(path)
+    is_new = conn.execute("SELECT 1 FROM networks WHERE bssid=?", (bssid,)).fetchone() is None
     conn.execute("""
         INSERT INTO networks (bssid, ssid, channel, rssi, security, vendor, first_seen, last_seen)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -119,6 +121,7 @@ def upsert_network(path: str, bssid: str, ssid: str, channel: int,
         (bssid, rssi, now),
     )
     conn.commit()
+    return is_new
 
 
 def upsert_client(path: str, mac: str, bssid: str, rssi: int, vendor: str = ""):

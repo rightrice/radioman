@@ -745,6 +745,17 @@ body {
 }
 .rm-chart-canvas.rm-chart-tall { height: 280px; }
 
+.rm-reco {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--rm-teal, #5ee1c8);
+  background: color-mix(in srgb, var(--rm-teal, #5ee1c8) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rm-teal, #5ee1c8) 35%, transparent);
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
 .rm-chart-legend {
   display: flex;
   flex-wrap: wrap;

@@ -22,6 +22,7 @@ from display import Display
 from capture import CaptureEngine
 from cracker import CrackQueue, CrackJob
 from scanner import NetworkScanner
+from wifiscan import WifiScanner
 from xplt import XpltSync
 from ai import AIEngine
 from api import create_app
@@ -64,6 +65,7 @@ class Radioman:
         pisugar_cfg = flat(cfg, "pisugar")
         display_cfg = flat(cfg, "display")
         xplt_cfg    = flat(cfg, "xplt")
+        wifiscan_cfg = flat(cfg, "wifiscan")
 
         self._iface       = main_cfg.get("interface", "wlan0")
         self._web_port    = int(main_cfg.get("web_port", 8080))
@@ -106,6 +108,18 @@ class Radioman:
             on_capture=self._on_capture,
         )
 
+        # Managed-mode AP scanner — populates Networks/Stats from the internal
+        # radio (no monitor mode needed). Pauses while bettercap holds the
+        # interface in monitor mode for capture.
+        self._wifiscan_enabled = wifiscan_cfg.get("enabled", "true").lower() != "false"
+        self.wifiscan = WifiScanner(
+            iface=self._iface,
+            on_network=self._on_network,
+            interval=int(wifiscan_cfg.get("interval", 60)),
+            should_pause=lambda: self.capture.scanning,
+            vendor_lookup=self.scanner._vendor_for,
+        )
+
         self._state = {
             "db_path":      self._db_path,
             "conf_path":    self._conf_path,
@@ -127,11 +141,13 @@ class Radioman:
         if db.is_ignored(self._db_path, bssid):
             log.debug("Ignored AP: %s (%s)", bssid, ssid)
             return
-        db.upsert_network(self._db_path, bssid, ssid, channel, rssi, security, vendor)
+        is_new = db.upsert_network(self._db_path, bssid, ssid, channel, rssi, security, vendor)
         log.debug("AP: %-17s  ch%-3d  %4ddBm  %-6s  %s  [%s]",
                   bssid, channel, rssi, security, ssid or "(hidden)", vendor or "?")
-        db.log_event(self._db_path, "info", f"AP: {ssid or bssid} ch{channel} {rssi}dBm {security}")
-        self.personality.on_new_network()
+        # Only announce genuinely new APs — re-sightings every scan would spam.
+        if is_new:
+            db.log_event(self._db_path, "info", f"AP: {ssid or bssid} ch{channel} {rssi}dBm {security}")
+            self.personality.on_new_network()
 
     def _on_client(self, mac, bssid, rssi, vendor):
         if bssid and db.is_ignored(self._db_path, bssid):
@@ -231,6 +247,10 @@ class Radioman:
         self.crack_queue.start()
         self.capture.start()
         self.xplt_sync.start()
+        if self._wifiscan_enabled:
+            self.wifiscan.start()
+        else:
+            log.info("Internal WiFi scanner disabled (wifiscan.enabled=false)")
 
         threading.Thread(target=self._display_loop,    daemon=True, name="display").start()
         threading.Thread(target=self._personality_loop, daemon=True, name="personality").start()
@@ -251,6 +271,7 @@ class Radioman:
         self.capture.stop()
         self.crack_queue.stop()
         self.scanner.stop()
+        self.wifiscan.stop()
         self.xplt_sync.stop()
         self.display.sleep()
         db.log_event(self._db_path, "info", "radioman stopped")
