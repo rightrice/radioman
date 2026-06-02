@@ -9,6 +9,7 @@ Install AI components first: sudo bash setup/install_ai.sh
 
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -189,34 +190,57 @@ class AIEngine:
         ]
         log.debug("llama-cli: ctx=%d batch=%d n_predict=%d threads=%d",
                   CTX_SIZE, BATCH, N_PREDICT, THREADS)
+
+        # This llama-cli build runs an interactive REPL that never exits on EOF
+        # (it busy-loops printing ">"). So we stream stdout, stop once the
+        # end-of-generation stats line appears (or the REPL starts idle-looping),
+        # then kill it. A watchdog timer enforces the hard timeout.
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=TIMEOUT,
-                stdin=subprocess.DEVNULL,   # never block waiting for interactive input
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL, text=True,
             )
-            out = result.stdout
-            if out.startswith(prompt):
-                out = out[len(prompt):]
-            out = out.strip()
-            for stop in ["<|user|>", "<|system|>", "<|endoftext|>"]:
-                if stop in out:
-                    out = out[:out.index(stop)].strip()
-            if result.returncode != 0 and not out:
-                log.error("llama-cli rc=%d: %s", result.returncode, result.stderr[:300])
-                return None
-            return out or None
-        except subprocess.TimeoutExpired:
-            log.warning("AI inference timed out after %ds", TIMEOUT)
-            return None
         except FileNotFoundError:
             log.error("llama-cli not found at %s", LLAMA_CLI)
             return None
         except Exception as e:
             log.error("AI inference error: %s", e)
             return None
+
+        collected, idle_prompts = [], 0
+        watchdog = threading.Timer(TIMEOUT, proc.kill)
+        watchdog.start()
+        try:
+            for line in proc.stdout:
+                if "Generation:" in line and "t/s" in line:
+                    break                                  # generation stats = done
+                if line.strip() == ">":                    # REPL idle prompt
+                    idle_prompts += 1
+                    if idle_prompts >= 2 and any(s.strip() for s in collected):
+                        break
+                    continue
+                collected.append(line)
+        except Exception as e:
+            log.debug("AI read error: %s", e)
+        finally:
+            watchdog.cancel()
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+
+        out = "".join(collected)
+        # The real answer follows the FINAL assistant turn (the prompt is echoed);
+        # rsplit also leaves clean output untouched when there's no marker.
+        if "<|assistant|>" in out:
+            out = out.rsplit("<|assistant|>", 1)[-1]
+        out = out.strip()
+        for stop in ["<|user|>", "<|system|>", "<|endoftext|>", "<|end_of_text|>"]:
+            if stop in out:
+                out = out[:out.index(stop)].strip()
+        out = re.sub(r"\n?>\s*$", "", out).strip()
+        return out or None
 
     def _run(self, messages: list, extra_system: str = "") -> dict:
         prompt  = self._build_prompt(messages, extra_system)
