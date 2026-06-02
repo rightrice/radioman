@@ -1,4 +1,6 @@
 #!/bin/bash
+# >>> READ scripts/BUILD_LLAMA.md FIRST — build context, gotchas, the llama-cli
+#     REPL caveat, version pinning, and deploy/verify steps.
 # Cross-compile llama-cli for ARM64 Linux inside WSL2 (Ubuntu).
 # Run from inside WSL2:
 #   bash scripts/build_llama_wsl.sh [zero2w_ip_or_hostname]
@@ -50,11 +52,17 @@ mkdir -p "$OUT_DIR"
 TMP=$(mktemp -d -p "$OUT_DIR")
 trap 'rm -rf "$TMP"' EXIT
 
-log "Cloning llama.cpp (latest)..."
-git clone --depth=1 -q https://github.com/ggerganov/llama.cpp "$TMP/llama.cpp"
+# Pinned for reproducibility — floating master drifts (a recent master shipped a
+# llama-cli that runs an interactive REPL and never exits on EOF). Override with:
+#   LLAMA_REF=bNNNN bash scripts/build_llama_wsl.sh   (tags: github.com/ggml-org/llama.cpp/tags)
+LLAMA_REF="${LLAMA_REF:-b9451}"
 
-LLAMA_TAG=$(git -C "$TMP/llama.cpp" describe --tags --always 2>/dev/null || echo "unknown")
-info "llama.cpp version: $LLAMA_TAG"
+log "Cloning llama.cpp @ ${LLAMA_REF}..."
+git clone --depth=1 --branch "$LLAMA_REF" -q https://github.com/ggml-org/llama.cpp "$TMP/llama.cpp" \
+  || err "Could not clone llama.cpp tag '$LLAMA_REF' (check it exists, or set LLAMA_REF=master)"
+
+LLAMA_TAG="$LLAMA_REF"
+info "llama.cpp version: $LLAMA_TAG (pinned)"
 
 # ── Cross-compile for aarch64 ─────────────────────────────────────────────────
 log "Configuring cmake for aarch64 cross-compilation..."
@@ -68,8 +76,9 @@ cmake -B "$TMP/llama.cpp/build" \
   -DBUILD_SHARED_LIBS=OFF \
   -DLLAMA_BUILD_TESTS=OFF \
   -DLLAMA_BUILD_EXAMPLES=ON \
-  -DCMAKE_C_FLAGS="-O2" \
-  -DCMAKE_CXX_FLAGS="-O2" \
+  -DLLAMA_BUILD_SERVER=ON \
+  -DCMAKE_C_FLAGS="-O3 -mcpu=cortex-a53" \
+  -DCMAKE_CXX_FLAGS="-O3 -mcpu=cortex-a53" \
   -DGGML_NATIVE=OFF \
   -DGGML_OPENMP=OFF \
   2>/dev/null
@@ -118,6 +127,19 @@ chmod +x "$LLAMA_BIN"
 SIZE=$(du -h "$LLAMA_BIN" | cut -f1)
 log "Binary ready: $LLAMA_BIN ($SIZE)"
 
+# Also grab llama-server — clean HTTP /completion API, immune to the CLI's
+# interactive-REPL quirks. Robust alternative if the CLI build misbehaves.
+SERVER_BIN="$OUT_DIR/llama-server"
+SERVER_BUILT=$(find "$TMP/llama.cpp/build" -name "llama-server" -type f 2>/dev/null | head -1)
+if [ -n "$SERVER_BUILT" ]; then
+  cp "$SERVER_BUILT" "$SERVER_BIN"
+  chmod +x "$SERVER_BIN"
+  info "Also built: $SERVER_BIN"
+else
+  warn "llama-server not found in build output — continuing with llama-cli only"
+  SERVER_BIN=""
+fi
+
 # Verify it's actually an ARM64 ELF (not x86)
 FILE_OUT=$(file "$LLAMA_BIN" 2>/dev/null || echo "")
 if echo "$FILE_OUT" | grep -q "aarch64\|ARM aarch64"; then
@@ -128,22 +150,30 @@ else
 fi
 
 # ── Transfer to Zero 2W ───────────────────────────────────────────────────────
+# Accept "user@host" directly, else default the user (override: SSH_USER=...).
+case "$ZERO_ADDR" in
+  *@*) SSH_TARGET="$ZERO_ADDR" ;;
+  *)   SSH_TARGET="${SSH_USER:-ubuntu}@${ZERO_ADDR}" ;;
+esac
+
 echo ""
 if [ -n "$ZERO_ADDR" ]; then
-  log "Transferring binary to kali@${ZERO_ADDR}:/tmp/llama-cli ..."
-  scp "$LLAMA_BIN" "kali@${ZERO_ADDR}:/tmp/llama-cli"
+  log "Transferring to ${SSH_TARGET}:/tmp/ ..."
+  scp "$LLAMA_BIN" "${SSH_TARGET}:/tmp/llama-cli"
+  if [ -n "$SERVER_BIN" ]; then scp "$SERVER_BIN" "${SSH_TARGET}:/tmp/llama-server"; fi
   log "Transfer complete."
   echo ""
   info "On the Zero 2W, run:"
   info "  sudo mkdir -p /opt/radioman/llama"
   info "  sudo mv /tmp/llama-cli /opt/radioman/llama/llama-cli"
-  info "  sudo chmod +x /opt/radioman/llama/llama-cli"
+  [ -n "$SERVER_BIN" ] && info "  sudo mv /tmp/llama-server /opt/radioman/llama/llama-server" || true
+  info "  sudo chmod +x /opt/radioman/llama/llama-*"
   info "  sudo systemctl restart radioman"
 else
   echo ""
-  warn "No Zero 2W address given — copy manually:"
-  warn "  scp $LLAMA_BIN kali@<zero_ip>:/tmp/llama-cli"
-  warn "  ssh kali@<zero_ip> 'sudo mv /tmp/llama-cli /opt/radioman/llama/llama-cli && sudo chmod +x /opt/radioman/llama/llama-cli'"
+  warn "No Zero 2W address given — copy manually (default user 'ubuntu', or pass user@host):"
+  warn "  scp $LLAMA_BIN ubuntu@<zero_ip>:/tmp/llama-cli"
+  warn "  ssh ubuntu@<zero_ip> 'sudo mv /tmp/llama-cli /opt/radioman/llama/llama-cli && sudo chmod +x /opt/radioman/llama/llama-cli'"
 fi
 
 echo ""

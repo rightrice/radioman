@@ -50,11 +50,14 @@ mkdir -p "$OUT_DIR"
 TMP=$(mktemp -d -p "$OUT_DIR")
 trap 'rm -rf "$TMP"' EXIT
 
-log "Cloning llama.cpp (latest)..."
-git clone --depth=1 -q https://github.com/ggerganov/llama.cpp "$TMP/llama.cpp"
+# Pinned for reproducibility (floating master drifts). Override: LLAMA_REF=bNNNN
+LLAMA_REF="${LLAMA_REF:-b9451}"
+log "Cloning llama.cpp @ ${LLAMA_REF}..."
+git clone --depth=1 --branch "$LLAMA_REF" -q https://github.com/ggml-org/llama.cpp "$TMP/llama.cpp" \
+  || err "Could not clone llama.cpp tag '$LLAMA_REF' (check it exists, or set LLAMA_REF=master)"
 
-LLAMA_TAG=$(git -C "$TMP/llama.cpp" describe --tags --always 2>/dev/null || echo "unknown")
-info "llama.cpp version: $LLAMA_TAG"
+LLAMA_TAG="$LLAMA_REF"
+info "llama.cpp version: $LLAMA_TAG (pinned)"
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 log "Configuring cmake..."
@@ -97,19 +100,23 @@ if "$LLAMA_BIN" --version 2>/dev/null | grep -q "version\|llama\|build"; then
 fi
 
 # ── Transfer to Zero 2W ───────────────────────────────────────────────────────
+case "$ZERO_IP" in
+  *@*) SSH_TARGET="$ZERO_IP" ;;
+  *)   SSH_TARGET="${SSH_USER:-ubuntu}@${ZERO_IP}" ;;
+esac
+
 echo ""
 if [ -n "$ZERO_IP" ]; then
-  log "Transferring to kali@${ZERO_IP}:/opt/radioman/llama/llama-cli ..."
-  ssh "kali@${ZERO_IP}" "mkdir -p /opt/radioman/llama"
-  scp "$LLAMA_BIN" "kali@${ZERO_IP}:/opt/radioman/llama/llama-cli"
-  ssh "kali@${ZERO_IP}" "chmod +x /opt/radioman/llama/llama-cli"
+  log "Transferring to ${SSH_TARGET}:/opt/radioman/llama/llama-cli ..."
+  ssh "$SSH_TARGET" "sudo mkdir -p /opt/radioman/llama"
+  scp "$LLAMA_BIN" "${SSH_TARGET}:/tmp/llama-cli"
+  ssh "$SSH_TARGET" "sudo mv /tmp/llama-cli /opt/radioman/llama/llama-cli && sudo chmod +x /opt/radioman/llama/llama-cli"
   log "Transfer complete."
   echo ""
-  info "On the Zero 2W, run:"
-  info "  sudo systemctl restart radioman"
+  info "On the Zero 2W, run:  sudo systemctl restart radioman"
 else
-  warn "No Zero IP given — copy manually:"
-  warn "  scp $LLAMA_BIN kali@<zero_ip>:/opt/radioman/llama/llama-cli"
+  warn "No Zero IP given — copy manually (default user 'ubuntu', or pass user@host):"
+  warn "  scp $LLAMA_BIN ubuntu@<zero_ip>:/tmp/llama-cli"
 fi
 
 echo ""

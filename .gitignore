@@ -29,3 +29,4 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+/scripts/BUILD_LLAMA.md
