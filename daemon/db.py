@@ -387,11 +387,15 @@ def clean_rssi_history(path: str, hours: int = 24) -> None:
 def get_graph(path: str) -> dict:
     """Return AP→client relationships for the network graph view."""
     conn = get_conn(path)
-    networks = conn.execute("SELECT bssid, ssid, security FROM networks").fetchall()
-    clients = conn.execute("SELECT mac, bssid, vendor FROM clients").fetchall()
-    nodes = [{"id": r["bssid"], "label": r["ssid"] or r["bssid"],
-              "type": "ap", "security": r["security"]} for r in networks]
-    nodes += [{"id": r["mac"], "label": r["vendor"] or r["mac"],
-               "type": "client"} for r in clients]
+    networks = conn.execute(
+        "SELECT bssid, ssid, channel, rssi, security, clients FROM networks").fetchall()
+    clients = conn.execute(
+        "SELECT mac, bssid, rssi, vendor FROM clients").fetchall()
+    nodes = [{"id": r["bssid"], "label": r["ssid"] or r["bssid"], "type": "ap",
+              "security": r["security"], "channel": r["channel"],
+              "rssi": r["rssi"], "clients": r["clients"]} for r in networks]
+    nodes += [{"id": r["mac"], "label": r["vendor"] or r["mac"], "type": "client",
+               "rssi": r["rssi"], "vendor": r["vendor"], "bssid": r["bssid"]}
+              for r in clients]
     edges = [{"source": r["bssid"], "target": r["mac"]} for r in clients if r["bssid"]]
     return {"nodes": nodes, "edges": edges}

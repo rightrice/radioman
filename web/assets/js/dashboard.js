@@ -8,10 +8,15 @@ let pollTimer   = null;
 let graphNodes  = [];
 let graphEdges  = [];
 let graphAnim   = null;
+let graphPositions = {};   // id -> {x,y,vx,vy}, persists across polls
+let graphSelected  = null; // id of clicked node
+let graphSettle    = 0;    // frames the layout has been "cool"
+let graphCtx = null, graphW = 0, graphH = 0, graphDpr = 1;
+let MY_BSSID    = "";   // user's own network, set from /api/status
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 const root = document.getElementById("rmRoot");
-const themeBtn = document.getElementById("rmThemeBtn");
+const settingsBtn = document.getElementById("rmSettingsBtn");
 
 function getTheme() {
   return localStorage.getItem("rm-theme") || "dark";
@@ -20,12 +25,12 @@ function setTheme(t) {
   root.setAttribute("data-aap-theme", t);
   document.documentElement.setAttribute("data-aap-theme", t);
   localStorage.setItem("rm-theme", t);
-  themeBtn.textContent = t === "dark" ? "☀︎" : "☾";
+  // Update the in-page theme toggle if the Settings view is mounted.
+  const tog = document.getElementById("rmThemeToggle");
+  if (tog) tog.textContent = t === "dark" ? "Dark ☾" : "Light ☀︎";
 }
 setTheme(getTheme());
-themeBtn.addEventListener("click", () => {
-  setTheme(getTheme() === "dark" ? "light" : "dark");
-});
+settingsBtn.addEventListener("click", () => navigate("settings"));
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 document.getElementById("rmNav").addEventListener("click", e => {
@@ -88,11 +93,12 @@ async function fetchViewData() {
     case "clients":   return get("/api/clients");
     case "captures":  return get("/api/captures");
     case "graph":     return get("/api/graph");
-    case "hosts":     return get("/api/hosts");
+    case "hosts":     return Promise.all([get("/api/hosts"), get("/api/hosts/scanstatus")]);
     case "log":       return get("/api/events?limit=100");
     case "ignore":    return get("/api/ignore");
     case "stats":     return Promise.all([get("/api/networks"), get("/api/stats")]);
     case "ai":        return get("/api/ai/status");
+    case "settings":  return Promise.all([get("/api/settings"), get("/api/wifi/status"), get("/api/networks")]);
     case "overview":  return Promise.all([get("/api/networks"), get("/api/events?limit=3")]);
     default:          return null;
   }
@@ -118,6 +124,11 @@ function renderView() {
 
 function renderMain(status, data, xplt = null) {
   const main = document.getElementById("rmMain");
+  MY_BSSID = (status?.my_bssid || "").toUpperCase();
+  // Stop the graph animation loop when not viewing it.
+  if (currentView !== "graph" && graphAnim) {
+    cancelAnimationFrame(graphAnim); graphAnim = null;
+  }
   switch (currentView) {
     case "overview": {
       const [recentNets, recentEvents] = Array.isArray(data) ? data : [[], []];
@@ -128,8 +139,18 @@ function renderMain(status, data, xplt = null) {
     case "networks":  main.innerHTML = viewNetworks(data || []); attachIgnoreHandlers(); break;
     case "clients":   main.innerHTML = viewClients(data || []); break;
     case "captures":  main.innerHTML = viewCaptures(data || []); attachCrackHandlers(); break;
-    case "graph":     main.innerHTML = viewGraph(); drawGraph(data || { nodes: [], edges: [] }); break;
-    case "hosts":     main.innerHTML = viewHosts(data || [], status); attachScanHandler(); break;
+    case "graph":
+      // Build the canvas once; subsequent polls only feed new data (no flash,
+      // selection + layout persist).
+      if (!document.getElementById("rmGraphCanvas")) main.innerHTML = viewGraph();
+      drawGraph(data || { nodes: [], edges: [] });
+      break;
+    case "hosts": {
+      const [hostRows, scan] = Array.isArray(data) ? data : [[], {}];
+      main.innerHTML = viewHosts(hostRows || [], scan || {});
+      attachScanHandler();
+      break;
+    }
     case "log":       main.innerHTML = viewLog(data || []); break;
     case "ignore":    main.innerHTML = viewIgnore(data || []); attachIgnoreHandlers(); break;
     case "stats": {
@@ -143,6 +164,12 @@ function renderMain(status, data, xplt = null) {
       main.innerHTML = viewAI(data || {});
       attachAIHandlers();
       break;
+    case "settings": {
+      const [settings, wifi, nets] = Array.isArray(data) ? data : [{}, {}, []];
+      main.innerHTML = viewSettings(settings || {}, wifi || {}, nets || []);
+      attachSettingsHandlers();
+      break;
+    }
   }
 }
 
@@ -413,9 +440,11 @@ function viewNetworks(rows) {
             <th>Signal</th><th>Security</th><th>Clients</th><th>Last Seen</th><th></th>
           </tr></thead>
           <tbody>
-            ${rows.map(r => `
-              <tr>
-                <td class="rm-table-ssid">${esc(r.ssid || "—")}</td>
+            ${rows.map(r => {
+              const mine = MY_BSSID && (r.bssid || "").toUpperCase() === MY_BSSID;
+              return `
+              <tr class="${mine ? "rm-row-mine" : ""}">
+                <td class="rm-table-ssid">${mine ? '<span class="rm-mine-star" title="Your network">★</span> ' : ""}${esc(r.ssid || "—")}</td>
                 <td class="rm-table-bssid rm-mono">${esc(r.bssid)}</td>
                 <td>${r.channel ?? "—"}</td>
                 <td>${rssiCell(r.rssi)}</td>
@@ -423,7 +452,7 @@ function viewNetworks(rows) {
                 <td>${r.clients ?? 0}</td>
                 <td class="rm-muted">${shortDate(r.last_seen)}</td>
                 <td><button class="rm-ignore-btn" data-bssid="${esc(r.bssid)}" title="Add to ignore list">Ignore</button></td>
-              </tr>`).join("")}
+              </tr>`; }).join("")}
           </tbody>
         </table>
       </div>
@@ -516,13 +545,16 @@ function attachCrackHandlers() {
 function viewGraph() {
   return `
     <div class="dash-panel dash-panel-full">
-      <div class="dash-panel-header"><h3>Network Graph</h3></div>
+      <div class="dash-panel-header"><h3>Network Graph</h3>
+        <span class="rm-muted" style="font-size:0.72rem">click a node for details</span>
+      </div>
       <div class="rm-graph-wrap">
         <canvas id="rmGraphCanvas"></canvas>
         <div class="rm-graph-legend">
           <span class="rm-legend-ap">Access Points</span>
           <span class="rm-legend-client">Clients</span>
         </div>
+        <div class="rm-graph-info" id="rmGraphInfo" style="display:none"></div>
       </div>
     </div>`;
 }
@@ -532,112 +564,182 @@ function drawGraph(data) {
   graphEdges = data.edges || [];
 
   const canvas = document.getElementById("rmGraphCanvas");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
+  if (!canvas) {
+    if (graphAnim) { cancelAnimationFrame(graphAnim); graphAnim = null; }
+    return;
+  }
 
-  const W = canvas.offsetWidth || 800;
-  const H = canvas.offsetHeight || 480;
-  canvas.width  = W;
-  canvas.height = H;
+  graphDpr = window.devicePixelRatio || 1;
+  graphW = canvas.offsetWidth  || 800;
+  graphH = canvas.offsetHeight || 480;
+  const needW = Math.round(graphW * graphDpr), needH = Math.round(graphH * graphDpr);
+  if (canvas.width !== needW || canvas.height !== needH) {  // avoid clearing/flicker on stable size
+    canvas.width = needW; canvas.height = needH;
+  }
+  graphCtx = canvas.getContext("2d");
 
-  const theme = getTheme();
-  const bgColor    = theme === "dark" ? "#0b1424" : "#f5f8fc";
-  const apColor    = "#5ee1c8";
-  const cliColor   = "#fbbf24";
-  const edgeColor  = theme === "dark" ? "rgba(148,163,184,0.2)" : "rgba(15,23,42,0.12)";
-  const textColor  = theme === "dark" ? "#94a3b8" : "#475569";
-
-  const positions = {};
+  // Keep existing node positions across polls (so the layout settles instead of
+  // restarting); seed new nodes near the centre, drop nodes that disappeared.
+  const ids = new Set(graphNodes.map(n => n.id));
+  Object.keys(graphPositions).forEach(id => { if (!ids.has(id)) delete graphPositions[id]; });
   graphNodes.forEach((n, i) => {
-    const angle = (i / graphNodes.length) * Math.PI * 2;
-    const r     = Math.min(W, H) * 0.35;
-    positions[n.id] = {
-      x: W / 2 + Math.cos(angle) * r * (n.type === "ap" ? 0.6 : 1),
-      y: H / 2 + Math.sin(angle) * r * (n.type === "ap" ? 0.6 : 1),
-      vx: 0, vy: 0,
-    };
+    if (!graphPositions[n.id]) {
+      const a = (i / Math.max(1, graphNodes.length)) * Math.PI * 2;
+      graphPositions[n.id] = {
+        x: graphW / 2 + Math.cos(a) * 60 + (Math.random() - 0.5) * 30,
+        y: graphH / 2 + Math.sin(a) * 60 + (Math.random() - 0.5) * 30,
+        vx: 0, vy: 0,
+      };
+    }
+  });
+  if (graphSelected && !ids.has(graphSelected)) { graphSelected = null; updateGraphInfo(null); }
+
+  if (!canvas._rmClickBound) {
+    canvas.addEventListener("click", onGraphClick);
+    canvas._rmClickBound = true;
+  }
+
+  graphSettle = 0;                       // re-energise briefly on refresh
+  if (!graphAnim) graphAnim = requestAnimationFrame(graphStep);
+}
+
+function graphStep() {
+  graphTick();
+  graphRender();
+  if (graphSettle > 60) { graphAnim = null; return; }  // stop when cool (saves CPU)
+  graphAnim = requestAnimationFrame(graphStep);
+}
+
+function graphTick() {
+  const W = graphW, H = graphH, P = graphPositions;
+  let energy = 0;
+
+  // Repulsion (normalised direction × inverse-square magnitude)
+  graphNodes.forEach(a => {
+    const pa = P[a.id]; if (!pa) return;
+    graphNodes.forEach(b => {
+      if (a.id === b.id) return;
+      const pb = P[b.id]; if (!pb) return;
+      const dx = pa.x - pb.x, dy = pa.y - pb.y;
+      const d  = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f  = 1400 / (d * d);
+      pa.vx += (dx / d) * f; pa.vy += (dy / d) * f;
+    });
   });
 
-  function tick() {
-    graphNodes.forEach(a => {
-      graphNodes.forEach(b => {
-        if (a.id === b.id) return;
-        const pa = positions[a.id], pb = positions[b.id];
-        const dx = pa.x - pb.x, dy = pa.y - pb.y;
-        const d  = Math.sqrt(dx * dx + dy * dy) || 1;
-        const f  = 800 / (d * d);
-        pa.vx += dx * f; pa.vy += dy * f;
-      });
-    });
-    graphEdges.forEach(e => {
-      const pa = positions[e.source], pb = positions[e.target];
-      if (!pa || !pb) return;
-      const dx = pb.x - pa.x, dy = pb.y - pa.y;
-      const d  = Math.sqrt(dx * dx + dy * dy) || 1;
-      const f  = (d - 80) * 0.015;
-      pa.vx += dx * f; pa.vy += dy * f;
-      pb.vx -= dx * f; pb.vy -= dy * f;
-    });
-    graphNodes.forEach(n => {
-      const p = positions[n.id];
-      p.vx *= 0.85; p.vy *= 0.85;
-      p.x = Math.max(20, Math.min(W - 20, p.x + p.vx));
-      p.y = Math.max(20, Math.min(H - 20, p.y + p.vy));
-    });
-  }
+  // Edge springs
+  graphEdges.forEach(e => {
+    const pa = P[e.source], pb = P[e.target];
+    if (!pa || !pb) return;
+    const dx = pb.x - pa.x, dy = pb.y - pa.y;
+    const d  = Math.sqrt(dx * dx + dy * dy) || 1;
+    const f  = (d - 70) * 0.02;
+    pa.vx += (dx / d) * f; pa.vy += (dy / d) * f;
+    pb.vx -= (dx / d) * f; pb.vy -= (dy / d) * f;
+  });
 
-  function draw() {
-    ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = bgColor;
-    ctx.fillRect(0, 0, W, H);
+  // Gravity toward centre — keeps nodes from drifting to the edges
+  graphNodes.forEach(n => {
+    const p = P[n.id]; if (!p) return;
+    p.vx += (W / 2 - p.x) * 0.006;
+    p.vy += (H / 2 - p.y) * 0.006;
+  });
 
-    ctx.strokeStyle = edgeColor;
-    ctx.lineWidth   = 1;
-    graphEdges.forEach(e => {
-      const pa = positions[e.source], pb = positions[e.target];
-      if (!pa || !pb) return;
-      ctx.beginPath();
-      ctx.moveTo(pa.x, pa.y);
-      ctx.lineTo(pb.x, pb.y);
-      ctx.stroke();
-    });
+  // Integrate + damp + clamp
+  graphNodes.forEach(n => {
+    const p = P[n.id]; if (!p) return;
+    p.vx *= 0.82; p.vy *= 0.82;
+    p.x = Math.max(26, Math.min(W - 26, p.x + p.vx));
+    p.y = Math.max(26, Math.min(H - 26, p.y + p.vy));
+    energy += p.vx * p.vx + p.vy * p.vy;
+  });
 
-    graphNodes.forEach(n => {
-      const p = positions[n.id];
-      if (!p) return;
-      const r = n.type === "ap" ? 9 : 6;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-      ctx.fillStyle   = n.type === "ap" ? apColor : cliColor;
-      ctx.shadowColor = n.type === "ap" ? apColor : cliColor;
-      ctx.shadowBlur  = 8;
-      ctx.fill();
-      ctx.shadowBlur  = 0;
+  graphSettle = energy < 0.5 ? graphSettle + 1 : 0;
+}
 
-      if (n.type === "ap" || graphNodes.length < 60) {
-        ctx.fillStyle  = textColor;
-        ctx.font       = "10px ui-monospace,monospace";
-        ctx.textAlign  = "center";
-        ctx.fillText((n.label || n.id).slice(0, 18), p.x, p.y + r + 12);
-      }
-    });
-  }
+function graphRender() {
+  const ctx = graphCtx, W = graphW, H = graphH, P = graphPositions;
+  if (!ctx) return;
+  ctx.setTransform(graphDpr, 0, 0, graphDpr, 0, 0);
 
-  let steps = 0;
-  function animate() {
-    tick();
-    draw();
-    steps++;
-    if (steps < 120 || graphAnim) {
-      graphAnim = requestAnimationFrame(animate);
+  const theme     = getTheme();
+  const bgColor   = theme === "dark" ? "#0b1424" : "#f5f8fc";
+  const apColor   = "#5ee1c8", cliColor = "#fbbf24";
+  const edgeColor = theme === "dark" ? "rgba(148,163,184,0.18)" : "rgba(15,23,42,0.10)";
+  const textColor = theme === "dark" ? "#94a3b8" : "#475569";
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = bgColor; ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = edgeColor; ctx.lineWidth = 1;
+  graphEdges.forEach(e => {
+    const pa = P[e.source], pb = P[e.target];
+    if (!pa || !pb) return;
+    ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
+  });
+
+  graphNodes.forEach(n => {
+    const p = P[n.id]; if (!p) return;
+    const sel = n.id === graphSelected;
+    const r   = (n.type === "ap" ? 8 : 5) + (sel ? 3 : 0);
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle   = n.type === "ap" ? apColor : cliColor;
+    ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = sel ? 16 : 6;
+    ctx.fill(); ctx.shadowBlur = 0;
+    if (sel) { ctx.strokeStyle = theme === "dark" ? "#fff" : "#0b1424"; ctx.lineWidth = 1.5; ctx.stroke(); }
+
+    if (n.type === "ap" || graphNodes.length < 50) {
+      ctx.fillStyle = textColor;
+      ctx.font      = "10px ui-monospace,monospace";
+      ctx.textAlign = "center";
+      const tx = Math.max(40, Math.min(W - 40, p.x));   // keep labels on-canvas
+      ctx.fillText((n.label || n.id).slice(0, 16), tx, p.y + r + 11);
     }
+  });
+}
+
+function onGraphClick(e) {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  let hit = null, best = 18 * 18;
+  graphNodes.forEach(n => {
+    const p = graphPositions[n.id]; if (!p) return;
+    const dx = p.x - x, dy = p.y - y, d2 = dx * dx + dy * dy;
+    if (d2 < best) { best = d2; hit = n; }
+  });
+  graphSelected = hit ? hit.id : null;
+  updateGraphInfo(hit);
+  if (!graphAnim) { graphSettle = 0; graphAnim = requestAnimationFrame(graphStep); }
+}
+
+function updateGraphInfo(node) {
+  const box = document.getElementById("rmGraphInfo");
+  if (!box) return;
+  if (!node) { box.style.display = "none"; return; }
+  const row = (k, v) => `<div class="rm-gi-row"><span>${k}</span><span>${v}</span></div>`;
+  let body;
+  if (node.type === "ap") {
+    body = row("BSSID", `<span class="rm-mono">${esc(node.id)}</span>`)
+         + row("Channel", node.channel ?? "—")
+         + row("Signal", node.rssi != null ? node.rssi + " dBm" : "—")
+         + row("Security", esc(node.security || "—"))
+         + row("Clients", node.clients ?? 0);
+  } else {
+    body = row("MAC", `<span class="rm-mono">${esc(node.id)}</span>`)
+         + row("Signal", node.rssi != null ? node.rssi + " dBm" : "—")
+         + row("Vendor", esc(node.vendor || "—"))
+         + row("AP", `<span class="rm-mono">${esc(node.bssid || "—")}</span>`);
   }
-  if (graphAnim) cancelAnimationFrame(graphAnim);
-  graphAnim = requestAnimationFrame(animate);
+  box.innerHTML = `<div class="rm-gi-title">${esc(node.label || node.id)}
+      <button class="rm-gi-close" id="rmGiClose">✕</button></div>${body}`;
+  box.style.display = "block";
+  document.getElementById("rmGiClose")?.addEventListener("click", () => {
+    graphSelected = null; updateGraphInfo(null);
+  });
 }
 
 // ── LAN Hosts ─────────────────────────────────────────────────────────────────
-function viewHosts(rows, _status) {
+function viewHosts(rows, scan = {}) {
   const sorted = [...rows].sort((a, b) => {
     const an = (a.ip || "").split(".").map(Number);
     const bn = (b.ip || "").split(".").map(Number);
@@ -646,10 +748,22 @@ function viewHosts(rows, _status) {
     }
     return 0;
   });
+  const scanning = !!scan.scanning;
+  let scanNote = "";
+  if (scan.last_error) {
+    scanNote = `<span class="rm-scan-err">${esc(scan.last_error)}</span>`;
+  } else if (scan.last_scan) {
+    scanNote = `<span class="rm-muted" style="font-size:0.72rem">last scan: ${shortDate(new Date(scan.last_scan * 1000).toISOString())} · found ${scan.last_count ?? 0}</span>`;
+  }
   return `
     <div class="rm-action-bar">
       <span class="rm-muted">${rows.length} host${rows.length !== 1 ? "s" : ""} on the LAN</span>
-      <button class="rm-btn rm-btn-primary" id="rmScanBtn">Run nmap scan</button>
+      <div style="display:flex;align-items:center;gap:0.75rem">
+        ${scanNote}
+        <button class="rm-btn rm-btn-primary" id="rmScanBtn" ${scanning ? "disabled" : ""}>
+          ${scanning ? "Scanning… ⟳" : "Run nmap scan"}
+        </button>
+      </div>
     </div>
     ${sorted.length
       ? `<div class="dash-panel dash-panel-full">
@@ -670,23 +784,24 @@ function viewHosts(rows, _status) {
             </table>
           </div>
         </div>`
-      : empty("🏠", "No LAN hosts discovered yet")}`;
+      : empty("🏠", scanning ? "Scanning the LAN…" : "No LAN hosts yet — run an nmap scan")}`;
 }
 
 function attachScanHandler() {
   const btn = document.getElementById("rmScanBtn");
   if (!btn) return;
   btn.addEventListener("click", async () => {
-    btn.textContent = "Scanning…";
+    btn.textContent = "Scanning… ⟳";
     btn.disabled = true;
     try {
-      const hosts = await post("/api/hosts/scan");
-      btn.textContent = `Done — ${hosts.length} hosts`;
-      setTimeout(poll, 1000);
+      // Fire-and-forget: the backend scans in the background; the periodic
+      // poll picks up scan state + results. No long-blocking request here.
+      await post("/api/hosts/scan");
+      setTimeout(poll, 800);   // refresh to reflect "scanning" state
     } catch (e) {
-      btn.textContent = "Error";
+      btn.textContent = "Error — retry";
+      btn.disabled = false;
     }
-    setTimeout(() => { btn.textContent = "Run nmap scan"; btn.disabled = false; }, 3000);
   });
 }
 
@@ -891,16 +1006,46 @@ function viewStats(networks) {
   const total = networks.length;
   const has24  = networks.some(n => n.channel >= 1  && n.channel <= 14);
   const has5   = networks.some(n => n.channel >= 36);
+
+  const cong = networkCongestion(networks);
+  const heatPanel = cong.length ? `
+      <div class="dash-panel rm-chart-panel rm-chart-full">
+        <div class="dash-panel-header"><h3>Network Congestion</h3>
+          <span class="rm-muted" style="font-size:0.72rem">who's crowding the air — click for signal history</span>
+        </div>
+        <div class="rm-settings-body rm-heat-list">
+          ${cong.map(({ net, norm }) => {
+            const mine = MY_BSSID && (net.bssid || "").toUpperCase() === MY_BSSID;
+            return `
+            <button class="rm-heat-row rm-rssi-row-btn" data-bssid="${esc(net.bssid)}" data-ssid="${esc(net.ssid || net.bssid)}" data-channel="${net.channel ?? ""}" data-security="${esc(net.security || "")}" data-rssi="${net.rssi ?? ""}">
+              <span class="rm-heat-name">${mine ? '<span class="rm-mine-star">★</span> ' : ""}${esc(net.ssid || "(hidden)")}</span>
+              <span class="rm-heat-ch">ch ${net.channel ?? "—"}</span>
+              <span class="rm-heat-sig rm-mono">${net.rssi ?? "—"} dBm</span>
+              <span class="rm-heat-bar"><span class="rm-heat-fill" style="width:${Math.round(norm * 100)}%;background:${heatColor(norm)}"></span></span>
+            </button>`;
+          }).join("")}
+        </div>
+      </div>` : "";
+
+  const fiveGhzEmpty = `
+      <div class="dash-panel rm-chart-panel rm-chart-full">
+        <div class="dash-panel-header"><h3>5 GHz</h3></div>
+        <div class="rm-settings-body">
+          <p class="rm-muted" style="margin:0">No 5 GHz networks detected. The Pi's internal radio is
+          <strong>2.4 GHz only</strong> — 5 GHz analysis appears here automatically once a dual-band USB
+          adapter (e.g. Alfa AWUS036ACH) is connected and scanning.</p>
+        </div>
+      </div>`;
   return `
     <div class="rm-action-bar">
       <span class="rm-muted">${total} network${total !== 1 ? "s" : ""} in database</span>
-      <span class="rm-muted rm-mono" style="font-size:0.72rem">click a row in Networks to see RSSI history</span>
+      <span class="rm-muted rm-mono" style="font-size:0.72rem">click a network in the congestion list for signal history</span>
     </div>
     <div class="rm-stats-grid">
       ${has24 ? `
       <div class="dash-panel rm-chart-panel rm-chart-full" id="rmChartChannel24Wrap">
         <div class="dash-panel-header"><h3>2.4 GHz Channel Analyzer</h3>
-          <span class="rm-muted" style="font-size:0.72rem">WiFiman-style — curves show signal per AP</span>
+          <span class="rm-muted" style="font-size:0.72rem">WiFi Analyzer</span>
         </div>
         <div class="rm-chart-wrap">
           <canvas id="rmChannelChart24" class="rm-chart-canvas rm-chart-tall"></canvas>
@@ -915,6 +1060,7 @@ function viewStats(networks) {
           <canvas id="rmCongestion24" class="rm-chart-canvas"></canvas>
         </div>
       </div>` : ""}
+      ${heatPanel}
       ${has5 ? `
       <div class="dash-panel rm-chart-panel rm-chart-full">
         <div class="dash-panel-header"><h3>5 GHz Channel Analyzer</h3></div>
@@ -930,7 +1076,7 @@ function viewStats(networks) {
         <div class="rm-chart-wrap">
           <canvas id="rmCongestion5" class="rm-chart-canvas"></canvas>
         </div>
-      </div>` : ""}
+      </div>` : fiveGhzEmpty}
       <div class="dash-panel rm-chart-panel">
         <div class="dash-panel-header"><h3>Security Breakdown</h3></div>
         <div class="rm-chart-wrap">
@@ -988,6 +1134,27 @@ const CH5_STD   = [36, 40, 44, 48, 149, 153, 157, 161]; // common UNII-1/3 chann
 // -30 dBm → 1.0, -95 dBm → ~0.0
 function sigWeight(rssi) {
   return Math.max(0.1, Math.min(1, ((rssi ?? -90) + 95) / 65));
+}
+
+// Per-network congestion contribution: a loud AP sitting on a crowded channel
+// scores hot. Returns networks sorted hottest-first with a normalised score.
+function networkCongestion(nets) {
+  const aps = (nets || []).filter(n => n.channel >= 1 && n.channel <= 14);
+  const overlap = d => Math.max(0, 1 - d / 5);
+  const congAt = ch => aps.reduce((s, n) => s + sigWeight(n.rssi) * overlap(Math.abs(ch - n.channel)), 0);
+  const scored = aps.map(n => ({ net: n, score: sigWeight(n.rssi) * congAt(n.channel) }));
+  scored.sort((a, b) => b.score - a.score);
+  const max = Math.max(1, ...scored.map(s => s.score));
+  scored.forEach(s => { s.norm = s.score / max; });
+  return scored;
+}
+
+// Cool (green) → hot (red)
+function heatColor(norm) {
+  const r = Math.round(52  + (248 - 52)  * norm);
+  const g = Math.round(211 + (113 - 211) * norm);
+  const b = Math.round(153 + (113 - 153) * norm);
+  return `rgb(${r},${g},${b})`;
 }
 
 // Returns { bars:[{ch,score}], best } — congestion score per channel,
@@ -1078,11 +1245,15 @@ function drawCongestion(canvas, nets, band, textClr, lineClr, recoElId) {
 }
 
 function _fitCanvas(canvas) {
+  const dpr = window.devicePixelRatio || 1;
   const W = canvas.offsetWidth  || 600;
   const H = canvas.offsetHeight || 220;
-  canvas.width  = W;
-  canvas.height = H;
-  return { W, H, ctx: canvas.getContext("2d") };
+  // Back the canvas at device resolution, then draw in CSS pixels — crisp on Retina.
+  canvas.width  = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { W, H, ctx };
 }
 
 // WiFiman-style channel chart: Gaussian arches per AP
@@ -1158,6 +1329,14 @@ function drawChannelChart(canvas, networks, chMin, chMax, textClr, lineClr, lege
     const cy = rssiY(net.rssi);
     ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2);
     ctx.fillStyle = color; ctx.fill();
+
+    // Mark the user's own network
+    if (MY_BSSID && (net.bssid || "").toUpperCase() === MY_BSSID) {
+      ctx.fillStyle = "#fbbf24";
+      ctx.font = "bold 14px ui-monospace,monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("★", cx, cy - 7);
+    }
 
     if (legendEl) {
       const item = document.createElement("span");
@@ -1322,14 +1501,21 @@ function attachRssiClickHandlers() {
     btn.addEventListener("click", async () => {
       const bssid = btn.dataset.bssid;
       const ssid  = btn.dataset.ssid || bssid;
-      await showRssiModal(bssid, ssid);
+      await showRssiModal(bssid, ssid, btn.dataset);
     });
   });
 }
 
-async function showRssiModal(bssid, ssid) {
+async function showRssiModal(bssid, ssid, meta = {}) {
   let modal = document.getElementById("rmRssiModal");
   if (modal) modal.remove();
+
+  const chips = [];
+  if (meta.channel)  chips.push(`ch ${esc(meta.channel)}`);
+  if (meta.rssi)     chips.push(`${esc(meta.rssi)} dBm`);
+  if (meta.security) chips.push(esc(meta.security));
+  chips.push(`<span class="rm-mono">${esc(bssid)}</span>`);
+  const statLine = `<div class="rm-rssi-stats">${chips.map(c => `<span>${c}</span>`).join("")}</div>`;
 
   modal = document.createElement("div");
   modal.id        = "rmRssiModal";
@@ -1337,9 +1523,10 @@ async function showRssiModal(bssid, ssid) {
   modal.innerHTML = `
     <div class="rm-rssi-modal-inner">
       <div class="rm-rssi-modal-header">
-        <h3>RSSI History — ${esc(ssid)}</h3>
+        <h3>${esc(ssid)}</h3>
         <button class="rm-rssi-close" id="rmRssiCloseBtn">✕</button>
       </div>
+      ${statLine}
       <canvas id="rmRssiHistCanvas" style="width:100%;height:200px;display:block"></canvas>
       <div class="rm-muted" id="rmRssiHistNote" style="font-size:0.72rem;margin-top:0.5rem;text-align:center">
         Loading…
@@ -1642,6 +1829,143 @@ function sendUserMessage() {
   aiHistorySave(aiHistory);
   appendAIBubble("user", text);
   aiSend([...aiHistory]);
+}
+
+// ── Settings view ─────────────────────────────────────────────────────────────
+function viewSettings(settings, wifi, nets) {
+  const theme = getTheme();
+  const ssids = [...new Set((nets || []).map(n => n.ssid).filter(Boolean))].sort();
+  const myBssid = (settings.my_bssid || "").toUpperCase();
+  const apOptions = [...(nets || [])]
+    .filter(n => n.bssid)
+    .sort((a, b) => (b.rssi ?? -100) - (a.rssi ?? -100))
+    .map(n => {
+      const sel = (n.bssid || "").toUpperCase() === myBssid ? "selected" : "";
+      return `<option value="${esc(n.bssid)}" data-ssid="${esc(n.ssid || "")}" ${sel}>${esc((n.ssid || "(hidden)") + " — " + n.bssid)}</option>`;
+    }).join("");
+  // Keep a saved "my network" selectable even if it isn't in the current scan.
+  const haveMine = (nets || []).some(n => (n.bssid || "").toUpperCase() === myBssid);
+  const savedOpt = (myBssid && !haveMine)
+    ? `<option value="${esc(settings.my_bssid)}" data-ssid="${esc(settings.my_ssid || "")}" selected>${esc((settings.my_ssid || "(saved)") + " — " + settings.my_bssid)}</option>`
+    : "";
+
+  let wifiStatus;
+  if (wifi.connecting) {
+    wifiStatus = `<div class="rm-wifi-status"><span class="rm-spinner-sm"></span> ${esc(wifi.message || "Connecting…")}</div>`;
+  } else if (wifi.connected) {
+    wifiStatus = `<div class="rm-wifi-status rm-wifi-ok">
+      <strong>${esc(wifi.ssid)}</strong>
+      <span class="rm-muted">${wifi.signal != null ? wifi.signal + " dBm · " : ""}${esc(wifi.ip || "no IP")} · ${esc(wifi.manager || "")}</span>
+    </div>`;
+  } else {
+    wifiStatus = `<div class="rm-wifi-status rm-wifi-off">Not connected to WiFi</div>`;
+  }
+
+  return `
+    <div class="rm-settings">
+      <div class="dash-panel dash-panel-full">
+        <div class="dash-panel-header"><h3>Appearance</h3></div>
+        <div class="rm-settings-body">
+          <div class="rm-setting-row">
+            <div>
+              <div class="rm-setting-label">Theme</div>
+              <div class="rm-muted" style="font-size:0.78rem">Dashboard color scheme</div>
+            </div>
+            <button class="rm-btn" id="rmThemeToggle">${theme === "dark" ? "Dark ☾" : "Light ☀︎"}</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="dash-panel dash-panel-full">
+        <div class="dash-panel-header"><h3>WiFi Connection</h3>
+          <span class="rm-muted" style="font-size:0.72rem">join a network so the Pi stays online</span>
+        </div>
+        <div class="rm-settings-body">
+          ${wifiStatus}
+          <div class="rm-setting-form">
+            <input class="rm-ignore-input" id="rmWifiSsid" list="rmSsidList" placeholder="Network name (SSID)"
+                   maxlength="64" autocomplete="off" value="${esc(wifi.connected ? wifi.ssid : "")}" />
+            <datalist id="rmSsidList">${ssids.map(s => `<option value="${esc(s)}"></option>`).join("")}</datalist>
+            <input class="rm-ignore-input" id="rmWifiPass" type="password" placeholder="Password (blank if open)"
+                   maxlength="64" autocomplete="off" />
+            <button class="rm-btn rm-btn-primary" id="rmWifiConnectBtn" ${wifi.connecting ? "disabled" : ""}>Connect</button>
+          </div>
+          <div class="rm-muted" id="rmWifiMsg" style="font-size:0.78rem;margin-top:0.4rem">${esc(wifi.connecting ? "" : (wifi.message || ""))}</div>
+          <div class="rm-muted" style="font-size:0.72rem;margin-top:0.5rem">
+            ⚠ Switching WiFi can briefly drop wlan0 — manage the Pi over USB (10.55.0.1) when changing networks.
+          </div>
+        </div>
+      </div>
+
+      <div class="dash-panel dash-panel-full">
+        <div class="dash-panel-header"><h3>Scan Settings</h3></div>
+        <div class="rm-settings-body">
+          <div class="rm-setting-stack">
+            <label class="rm-setting-label" for="rmScanTarget">LAN scan target</label>
+            <input class="rm-ignore-input rm-mono" id="rmScanTarget"
+                   placeholder="auto-detect (e.g. 192.168.1.0/24)" maxlength="32" value="${esc(settings.scan_target || "")}" />
+            <div class="rm-muted" style="font-size:0.72rem">Subnet the nmap LAN scan targets. Blank = auto-detect from ${esc(settings.iface || "wlan0")}.</div>
+          </div>
+          <div class="rm-setting-stack" style="margin-top:1rem">
+            <label class="rm-setting-label" for="rmMyBssid">My network</label>
+            <select class="rm-ignore-input" id="rmMyBssid">
+              <option value="" ${myBssid ? "" : "selected"}>— none —</option>
+              ${savedOpt}${apOptions}
+            </select>
+            <div class="rm-muted" style="font-size:0.72rem">Highlighted as &ldquo;yours&rdquo; in the Networks &amp; channel views.</div>
+          </div>
+          <div style="margin-top:1rem">
+            <button class="rm-btn rm-btn-primary" id="rmSettingsSaveBtn">Save settings</button>
+            <span id="rmSettingsMsg" class="rm-muted" style="margin-left:0.75rem;font-size:0.78rem"></span>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function attachSettingsHandlers() {
+  document.getElementById("rmThemeToggle")?.addEventListener("click", () => {
+    setTheme(getTheme() === "dark" ? "light" : "dark");
+  });
+
+  document.getElementById("rmWifiConnectBtn")?.addEventListener("click", async () => {
+    const ssid = document.getElementById("rmWifiSsid")?.value.trim();
+    const password = document.getElementById("rmWifiPass")?.value || "";
+    const msg = document.getElementById("rmWifiMsg");
+    if (!ssid) { if (msg) msg.textContent = "Enter a network name (SSID)."; return; }
+    const btn = document.getElementById("rmWifiConnectBtn");
+    btn.disabled = true; btn.textContent = "Connecting…";
+    if (msg) msg.textContent = `Connecting to ${ssid}…`;
+    try {
+      const r = await post("/api/wifi/connect", { ssid, password });
+      if (r.error) {
+        if (msg) msg.textContent = r.error;
+        btn.disabled = false; btn.textContent = "Connect";
+      } else {
+        setTimeout(poll, 1500);   // background connect; status updates on poll
+      }
+    } catch (e) {
+      if (msg) msg.textContent = "Connection request failed.";
+      btn.disabled = false; btn.textContent = "Connect";
+    }
+  });
+
+  document.getElementById("rmSettingsSaveBtn")?.addEventListener("click", async () => {
+    const scan_target = document.getElementById("rmScanTarget")?.value.trim() || "";
+    const sel = document.getElementById("rmMyBssid");
+    const my_bssid = sel?.value || "";
+    const my_ssid  = sel?.selectedOptions?.[0]?.dataset?.ssid || "";
+    const msg = document.getElementById("rmSettingsMsg");
+    try {
+      const r = await post("/api/settings", { scan_target, my_bssid, my_ssid });
+      if (msg) {
+        msg.textContent = r.error || "Saved ✓";
+        msg.style.color = r.error ? "var(--rm-red)" : "";
+      }
+    } catch (e) {
+      if (msg) msg.textContent = "Save failed";
+    }
+  });
 }
 
 // ── Kick off ──────────────────────────────────────────────────────────────────

@@ -43,6 +43,15 @@ enabled = true
 # Seconds between scans (minimum 15)
 interval = 60
 
+[scan]
+# LAN host-discovery (nmap) target. Leave blank to auto-detect from wlan0,
+# or set a subnet/CIDR (e.g. 192.168.1.0/24). Editable in the dashboard Settings.
+target =
+
+# Mark your own network so it's highlighted in the WiFi views. Set via Settings.
+my_bssid =
+my_ssid =
+
 [cracker]
 # Path to wordlist
 wordlist = /opt/radioman/wordlists/rockyou.txt

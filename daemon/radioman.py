@@ -66,6 +66,11 @@ class Radioman:
         display_cfg = flat(cfg, "display")
         xplt_cfg    = flat(cfg, "xplt")
         wifiscan_cfg = flat(cfg, "wifiscan")
+        scan_cfg    = flat(cfg, "scan")
+
+        self._scan_target = scan_cfg.get("target", "").strip()
+        self._my_bssid    = scan_cfg.get("my_bssid", "").strip().upper()
+        self._my_ssid     = scan_cfg.get("my_ssid", "").strip()
 
         self._iface       = main_cfg.get("interface", "wlan0")
         self._web_port    = int(main_cfg.get("web_port", 8080))
@@ -99,7 +104,8 @@ class Radioman:
             model=display_cfg.get("model", "epd2in13_V4"),
             rotate=int(display_cfg.get("rotate", 180)),
         )
-        self.scanner     = NetworkScanner(iface=self._iface, on_host=self._on_host)
+        self.scanner     = NetworkScanner(iface=self._iface, on_host=self._on_host,
+                                          target=self._scan_target)
         self.crack_queue = CrackQueue(crack_cfg, on_cracked=self._on_cracked)
         self.capture     = CaptureEngine(
             config=capture_cfg,
@@ -124,6 +130,10 @@ class Radioman:
             "db_path":      self._db_path,
             "conf_path":    self._conf_path,
             "captures_dir": capture_cfg.get("captures_dir", "/opt/radioman/captures"),
+            "iface":        self._iface,
+            "scan_target":  self._scan_target,
+            "my_bssid":     self._my_bssid,
+            "my_ssid":      self._my_ssid,
             "personality": self.personality,
             "battery":    bat.read,
             "scanner":    self.scanner,

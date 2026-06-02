@@ -1071,3 +1071,98 @@ body {
   .rm-log-row { grid-template-columns: 1fr; gap: 0.2rem; }
   .rm-log-ts  { display: none; }
 }
+
+/* ── Settings page ──────────────────────────────────────────── */
+.rm-settings { display: flex; flex-direction: column; gap: 1.25rem; }
+.rm-settings-body { padding: 1rem 1.25rem 1.25rem; }
+
+.rm-setting-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+}
+.rm-setting-stack { display: flex; flex-direction: column; gap: 0.4rem; max-width: 460px; }
+.rm-setting-label { font-weight: 600; font-size: 0.9rem; }
+
+.rm-setting-form {
+  display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.85rem; align-items: center;
+}
+.rm-setting-form .rm-ignore-input { flex: 1 1 200px; min-width: 160px; }
+select.rm-ignore-input { max-width: 460px; cursor: pointer; }
+
+.rm-wifi-status {
+  display: flex; flex-direction: column; gap: 0.15rem;
+  padding: 0.7rem 0.9rem; border-radius: 8px;
+  border: 1px solid var(--aap-line); font-size: 0.9rem;
+}
+.rm-wifi-ok  {
+  border-color: color-mix(in srgb, var(--rm-teal) 45%, transparent);
+  background: var(--rm-teal-soft);
+}
+.rm-wifi-off { color: var(--aap-muted); }
+
+.rm-spinner-sm {
+  display: inline-block; width: 13px; height: 13px;
+  border: 2px solid var(--aap-line); border-top-color: var(--rm-teal);
+  border-radius: 50%; animation: rm-spin 0.8s linear infinite;
+  vertical-align: middle; margin-right: 0.35rem;
+}
+
+.rm-scan-err { color: var(--rm-red); font-size: 0.74rem; max-width: 380px; text-align: right; }
+
+/* My-network highlight */
+.rm-row-mine { background: var(--rm-teal-soft); }
+.rm-mine-star { color: #fbbf24; }
+
+/* ── Graph node info popover ─────────────────────────────────── */
+.rm-graph-wrap { position: relative; }
+.rm-graph-info {
+  position: absolute; top: 12px; right: 12px;
+  min-width: 190px; max-width: 280px;
+  background: var(--aap-card, rgba(11,20,36,0.92));
+  border: 1px solid var(--aap-line);
+  border-radius: 10px; padding: 0.7rem 0.85rem;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  font-size: 0.8rem; backdrop-filter: blur(6px); z-index: 5;
+}
+.rm-gi-title {
+  font-weight: 600; margin-bottom: 0.45rem; padding-right: 1.2rem;
+  word-break: break-all; position: relative;
+}
+.rm-gi-close {
+  position: absolute; top: -2px; right: -2px;
+  background: none; border: none; color: var(--aap-muted);
+  cursor: pointer; font-size: 0.9rem; line-height: 1;
+}
+.rm-gi-row {
+  display: flex; justify-content: space-between; gap: 1rem;
+  padding: 0.12rem 0; color: var(--aap-muted);
+}
+.rm-gi-row span:last-child { color: var(--aap-fg, inherit); }
+
+/* ── Network congestion heatmap ──────────────────────────────── */
+.rm-heat-list { display: flex; flex-direction: column; gap: 0.3rem; }
+.rm-heat-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 1.6fr) auto auto minmax(80px, 2fr);
+  align-items: center; gap: 0.75rem;
+  width: 100%; text-align: left; cursor: pointer;
+  background: none; border: none; padding: 0.4rem 0.5rem;
+  border-radius: 8px; color: inherit; font-size: 0.84rem;
+}
+.rm-heat-row:hover { background: color-mix(in srgb, var(--rm-teal) 10%, transparent); }
+.rm-heat-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rm-heat-ch, .rm-heat-sig { color: var(--aap-muted); font-size: 0.78rem; white-space: nowrap; }
+.rm-heat-bar {
+  height: 10px; border-radius: 5px;
+  background: var(--aap-line); overflow: hidden;
+}
+.rm-heat-fill { display: block; height: 100%; border-radius: 5px; }
+
+/* ── RSSI modal quick-stats line ─────────────────────────────── */
+.rm-rssi-stats {
+  display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem;
+  margin: 0.25rem 0 0.75rem; font-size: 0.78rem; color: var(--aap-muted);
+}
+.rm-rssi-stats span {
+  background: color-mix(in srgb, var(--rm-teal) 12%, transparent);
+  padding: 0.1rem 0.5rem; border-radius: 999px;
+}

@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import threading
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 
@@ -23,12 +24,32 @@ def create_app(state: dict) -> Flask:
       crack_queue  CrackQueue
     """
     import db as _db
+    import netcfg
 
     app = Flask(__name__, static_folder=None)
     CORS(app)
 
+    # Tracks an in-flight WiFi-join attempt (background thread).
+    _wifi = {"connecting": False, "message": ""}
+
     def _db_path() -> str:
         return state["db_path"]
+
+    def _save_conf(section: str, values: dict):
+        """Persist settings to radioman.conf (survives restarts)."""
+        import configparser as _cp
+        conf_path = state.get("conf_path", "")
+        if not conf_path or not os.path.exists(conf_path):
+            log.warning("No conf_path — settings not persisted")
+            return
+        cfg = _cp.ConfigParser()
+        cfg.read(conf_path)
+        if section not in cfg:
+            cfg.add_section(section)
+        for k, v in values.items():
+            cfg.set(section, k, str(v))
+        with open(conf_path, "w") as fh:
+            cfg.write(fh)
 
     # ── Static web dashboard ──────────────────────────────────────────────────
     @app.route("/")
@@ -56,6 +77,7 @@ def create_app(state: dict) -> Flask:
             "battery":     batt,
             "stats":       stats,
             "scanning":    state["capture"].scanning,
+            "my_bssid":    state.get("my_bssid", ""),
             "crack_queue": {
                 "queued": cq.queue_size,
                 "active": cq.active_jobs,
@@ -141,8 +163,12 @@ def create_app(state: dict) -> Flask:
                     target = str(raw)
                 else:
                     return jsonify({"error": "invalid target format"}), 400
-        state["scanner"].nmap_scan(target)   # persists via on_host
-        return jsonify(_db.get_hosts(_db_path()))
+        started = state["scanner"].start_nmap_scan(target)   # background; persists via on_host
+        return jsonify({"started": started, **state["scanner"].scan_status()})
+
+    @app.route("/api/hosts/scanstatus")
+    def hosts_scanstatus():
+        return jsonify(state["scanner"].scan_status())
 
     # ── Events / log ─────────────────────────────────────────────────────────
     @app.route("/api/events")
@@ -287,6 +313,64 @@ def create_app(state: dict) -> Flask:
         if result.get("busy"):
             return jsonify(result), 429
         return jsonify(result)
+
+    # ── Settings (scan target + "my network") ────────────────────────────────
+    @app.route("/api/settings")
+    def get_settings():
+        return jsonify({
+            "scan_target": state.get("scan_target", ""),
+            "my_bssid":    state.get("my_bssid", ""),
+            "my_ssid":     state.get("my_ssid", ""),
+            "iface":       state.get("iface", "wlan0"),
+        })
+
+    @app.route("/api/settings", methods=["POST"])
+    def save_settings():
+        data        = request.json or {}
+        scan_target = str(data.get("scan_target", "")).strip()
+        my_bssid    = str(data.get("my_bssid", "")).strip().upper()
+        my_ssid     = str(data.get("my_ssid", "")).strip()[:64]
+
+        if scan_target and not re.fullmatch(r"[\w.\-/]+", scan_target):
+            return jsonify({"error": "Invalid scan target (use IP or CIDR, e.g. 192.168.1.0/24)"}), 400
+        if my_bssid and not re.fullmatch(r"[0-9A-F:]{17}", my_bssid):
+            return jsonify({"error": "Invalid BSSID (use AA:BB:CC:DD:EE:FF)"}), 400
+
+        state["scan_target"] = scan_target
+        state["my_bssid"]    = my_bssid
+        state["my_ssid"]     = my_ssid
+        state["scanner"].set_target(scan_target)
+        _save_conf("scan", {"target": scan_target, "my_bssid": my_bssid, "my_ssid": my_ssid})
+        return jsonify({"saved": True, "scan_target": scan_target,
+                        "my_bssid": my_bssid, "my_ssid": my_ssid})
+
+    # ── WiFi connection ───────────────────────────────────────────────────────
+    @app.route("/api/wifi/status")
+    def wifi_status():
+        st = netcfg.wifi_status(state.get("iface", "wlan0"))
+        st.update(_wifi)
+        return jsonify(st)
+
+    @app.route("/api/wifi/connect", methods=["POST"])
+    def wifi_connect():
+        data     = request.json or {}
+        ssid     = str(data.get("ssid", "")).strip()
+        password = str(data.get("password", ""))
+        if not ssid:
+            return jsonify({"error": "SSID required"}), 400
+        if _wifi["connecting"]:
+            return jsonify({"error": "A connection attempt is already in progress"}), 409
+
+        def worker():
+            _wifi["connecting"] = True
+            _wifi["message"]    = f"Connecting to {ssid}…"
+            ok, msg = netcfg.wifi_connect(state.get("iface", "wlan0"), ssid, password)
+            _wifi["message"]    = msg
+            _wifi["connecting"] = False
+            _db.log_event(_db_path(), "info", f"WiFi join '{ssid}': {msg}")
+
+        threading.Thread(target=worker, daemon=True, name="wifi-connect").start()
+        return jsonify({"started": True})
 
     @app.route("/api/ai/analyze", methods=["POST"])
     def ai_analyze():

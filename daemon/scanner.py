@@ -28,15 +28,21 @@ class NetworkScanner:
     """
 
     def __init__(self, iface: str = "wlan0", on_host: Callable = None,
-                 interval: int = 30):
+                 interval: int = 30, target: str = ""):
         self._iface     = iface
         self._on_host   = on_host
         self._interval  = interval
+        self._target    = (target or "").strip()   # configured nmap target override
         self._running   = False
         self._results   = {}      # ip -> host dict (in-memory snapshot)
         self._hostnames = {}      # ip -> hostname (cached, incl. negatives)
         self._oui       = None    # lazy-loaded {prefix: vendor}
         self._lock      = threading.Lock()
+        self._scan      = {"scanning": False, "last_scan": 0,
+                           "last_count": 0, "last_error": ""}
+
+    def set_target(self, target: str):
+        self._target = (target or "").strip()
 
     # ── Neighbour table (passive, zero packets) ────────────────────────────────
     def arp_scan(self) -> list:
@@ -94,11 +100,44 @@ class NetworkScanner:
         return hosts
 
     # ── nmap (active, on demand) ───────────────────────────────────────────────
+    def start_nmap_scan(self, target: str = None) -> bool:
+        """Kick off an nmap sweep in the background. Returns False if one is
+        already running (so the UI can stay responsive instead of blocking)."""
+        with self._lock:
+            if self._scan["scanning"]:
+                return False
+            self._scan["scanning"] = True
+            self._scan["last_error"] = ""
+        threading.Thread(target=self._run_nmap, args=(target,),
+                         daemon=True, name="nmap").start()
+        return True
+
+    def _run_nmap(self, target):
+        try:
+            hosts = self.nmap_scan(target)
+            with self._lock:
+                self._scan["last_count"] = len(hosts)
+                self._scan["last_scan"]  = time.time()
+        finally:
+            with self._lock:
+                self._scan["scanning"] = False
+
+    def scan_status(self) -> dict:
+        with self._lock:
+            return dict(self._scan)
+
+    def _set_error(self, msg: str):
+        log.warning("nmap: %s", msg)
+        with self._lock:
+            self._scan["last_error"] = msg
+
     def nmap_scan(self, target: str = None) -> list:
-        """Active nmap ping-sweep — call only on user request."""
-        target = target or _iface_subnet(self._iface)
+        """Active nmap ping-sweep. Prefers an explicit target, then the
+        configured target, then the wlan0 subnet."""
+        target = (target or self._target or _iface_subnet(self._iface)).strip()
         if not target:
-            log.warning("Could not determine subnet for nmap")
+            self._set_error("Could not determine the network to scan — "
+                            "set a scan target in Settings.")
             return []
 
         log.info("nmap scan: %s", target)
@@ -106,7 +145,7 @@ class NetworkScanner:
         try:
             out = subprocess.check_output(
                 ["nmap", "-sn", "-oX", "-", target],
-                text=True, timeout=120,
+                text=True, timeout=120, stderr=subprocess.DEVNULL,
             )
             root = ET.fromstring(out)
             for host in root.findall("host"):
@@ -122,11 +161,11 @@ class NetworkScanner:
                     self._enrich(h)
                     hosts.append(h)
         except FileNotFoundError:
-            log.warning("nmap not found — install with: sudo apt install nmap")
+            self._set_error("nmap is not installed (sudo apt install nmap).")
         except subprocess.TimeoutExpired:
-            log.warning("nmap timed out")
+            self._set_error("nmap timed out.")
         except Exception as e:
-            log.debug("nmap: %s", e)
+            self._set_error(f"nmap failed: {e}")
 
         self._store(hosts)
         return hosts
