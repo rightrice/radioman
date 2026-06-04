@@ -46,7 +46,12 @@
     <!-- Main -->
     <main class="dash-main" id="rmMain" aria-live="polite">
       <div class="rm-loading" id="rmLoading">
-        <div class="rm-spinner"></div>
+        <svg class="rm-wifi-loader" viewBox="0 0 48 36" fill="none" aria-label="Loading" aria-hidden="true">
+          <circle class="rm-wifi-dot"   cx="24" cy="30" r="2.5" fill="currentColor"/>
+          <path   class="rm-wifi-arc-1" d="M 18 26.5 A 7 7 0 0 0 30 26.5"         stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          <path   class="rm-wifi-arc-2" d="M 12.7 23.5 A 13 13 0 0 0 35.3 23.5"   stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          <path   class="rm-wifi-arc-3" d="M 7.5 20.5 A 19 19 0 0 0 40.5 20.5"    stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
         <p>Connecting to radioman...</p>
       </div>
     </main>

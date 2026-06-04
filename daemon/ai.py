@@ -23,10 +23,16 @@ LLAMA_CLI  = os.environ.get("LLAMA_CLI",  "/opt/radioman/llama/llama-cli")
 MODEL_PATH = os.environ.get("RADIOMAN_MODEL", "/opt/radioman/models/granite-4.0-350m-Q4_K_M.gguf")
 
 N_PREDICT = 256
-CTX_SIZE  = 1024   # system prompt + live context + conversation
+CTX_SIZE  = 2048   # system prompt + live context + conversation + output.
+                   # Was 1024 — too tight once live context + an analyze prompt
+                   # were added; the input alone could exceed it and llama-cli
+                   # would error or return nothing. 2048 KV cache is cheap for 350M.
 THREADS   = 4
 BATCH     = 128    # smaller prompt-processing batch = less compute-buffer RAM
 TIMEOUT   = 300    # Pi Zero 2W — slow under memory pressure
+
+# Rough input budget in characters (~3.2 chars/token, leaving room for output).
+MAX_PROMPT_CHARS = (CTX_SIZE - N_PREDICT) * 3
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 # Trimmed to ~200 tokens so the 1024-token window leaves room for live data +
@@ -61,6 +67,41 @@ def _binary_ok() -> bool:
 
 def _model_ok() -> bool:
     return os.path.isfile(MODEL_PATH) and os.path.getsize(MODEL_PATH) > 1_000_000
+
+
+def _safe_close(fd):
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+
+
+def _diagnose_stderr(stderr: str) -> str:
+    """Turn llama-cli's stderr into a human-readable failure reason for the UI."""
+    if not stderr.strip():
+        return ("Inference produced no output and llama-cli printed nothing. "
+                "The binary may be the wrong architecture — verify with: "
+                "file /opt/radioman/llama/llama-cli")
+    low = stderr.lower()
+    if "unknown argument" in low or "invalid argument" in low or "error: " in low and "usage:" in low:
+        # Pull the offending line so we know which flag this build rejects.
+        for line in stderr.splitlines():
+            if "argument" in line.lower():
+                return (f"llama-cli rejected a flag: {line.strip()[:160]} — "
+                        "this build uses a different CLI version than expected.")
+        return "llama-cli rejected a command-line flag (CLI version mismatch)."
+    if "failed to load model" in low or "error loading model" in low or "no such file" in low:
+        return ("llama-cli could not load the model. Re-download it: "
+                "sudo bash setup/install_ai.sh")
+    if "exec format error" in low or "cannot execute" in low:
+        return ("llama-cli is the wrong CPU architecture (not arm64). "
+                "Rebuild on a Linux/Mac host: bash scripts/build_llama_ubuntu.sh radioman.local")
+    if "out of memory" in low or "cannot allocate" in low or "killed" in low:
+        return ("Out of memory during inference. Confirm swap is active (free -h) "
+                "and that no scan/crack is running simultaneously.")
+    # Fallback: last non-empty stderr line.
+    tail = [l.strip() for l in stderr.splitlines() if l.strip()]
+    return f"Inference failed: {tail[-1][:200]}" if tail else "Inference failed (unknown error)."
 
 
 # ── Live context builder ──────────────────────────────────────────────────────
@@ -152,29 +193,55 @@ class AIEngine:
         }
 
     def _build_prompt(self, messages: list, extra_system: str = "") -> str:
-        """Format messages using IBM Granite chat template with live context injected."""
-        system = SYSTEM + extra_system
-        parts  = [
-            f"<|system|>\n{system}",
-            "<|assistant|>\nUnderstood. I have your current scan data and am ready to help.",
-        ]
-        for m in messages:
-            role    = m.get("role", "user")
-            content = str(m.get("content", "")).strip()
-            if role == "user":
-                parts.append(f"<|user|>\n{content}")
-                parts.append("<|assistant|>")
-            elif role == "assistant":
-                if parts and parts[-1] == "<|assistant|>":
-                    parts[-1] = f"<|assistant|>\n{content}"
-                else:
-                    parts.append(f"<|assistant|>\n{content}")
-        # Ensure open assistant turn at the end
-        if not parts[-1].startswith("<|assistant|>") or "\n" in parts[-1][14:]:
-            parts.append("<|assistant|>")
-        return "\n".join(parts)
+        """Format messages using IBM Granite chat template with live context injected.
 
-    def _infer(self, prompt: str) -> Optional[str]:
+        Keeps the system block + live context intact and drops the oldest
+        conversation turns if the assembled prompt would exceed the context
+        window (which would make llama-cli error or return nothing).
+        """
+        system = SYSTEM + extra_system
+
+        def assemble(msgs: list) -> str:
+            parts = [
+                f"<|system|>\n{system}",
+                "<|assistant|>\nUnderstood. I have your current scan data and am ready to help.",
+            ]
+            for m in msgs:
+                role    = m.get("role", "user")
+                content = str(m.get("content", "")).strip()
+                if role == "user":
+                    parts.append(f"<|user|>\n{content}")
+                    parts.append("<|assistant|>")
+                elif role == "assistant":
+                    if parts and parts[-1] == "<|assistant|>":
+                        parts[-1] = f"<|assistant|>\n{content}"
+                    else:
+                        parts.append(f"<|assistant|>\n{content}")
+            if not parts[-1].startswith("<|assistant|>") or "\n" in parts[-1][14:]:
+                parts.append("<|assistant|>")
+            return "\n".join(parts)
+
+        msgs   = list(messages)
+        prompt = assemble(msgs)
+        # Drop oldest turns until the prompt fits the input budget (always keep
+        # the most recent user message).
+        while len(prompt) > MAX_PROMPT_CHARS and len(msgs) > 1:
+            msgs.pop(0)
+            prompt = assemble(msgs)
+        if len(prompt) > MAX_PROMPT_CHARS:
+            log.warning("AI prompt still %d chars after trimming (budget %d)",
+                        len(prompt), MAX_PROMPT_CHARS)
+        return prompt
+
+    def _infer(self, prompt: str) -> dict:
+        """Run llama-cli once and return {"text": str} or {"error": str}.
+
+        stdout (the generated answer) is read over a PTY because this llama-cli
+        build block-buffers stdout when it's a plain pipe. stderr (model-load
+        logs, perf stats, and crucially any flag/load errors) is captured on a
+        SEPARATE pipe so a real failure reason can be surfaced instead of a
+        generic "inference failed".
+        """
         cmd = [
             LLAMA_CLI,
             "--model",          MODEL_PATH,
@@ -187,69 +254,85 @@ class AIEngine:
             "--repeat-penalty", "1.1",
             "-no-cnv",            # one-shot completion — NOT interactive chat mode
             "--no-display-prompt",
-            "--log-disable",
             "--prompt",         prompt,
         ]
         log.debug("llama-cli: ctx=%d batch=%d n_predict=%d threads=%d",
                   CTX_SIZE, BATCH, N_PREDICT, THREADS)
 
-        # This llama-cli build is an interactive REPL: it block-buffers stdout
-        # when that's a pipe (so the answer is lost), and never exits on EOF.
-        # Run it under a PTY so it line-flushes like a real terminal; stream
-        # until the end-of-generation stats line, then kill it. A deadline bounds
-        # the whole thing.
         master_fd, slave_fd = pty.openpty()
+        stderr_r, stderr_w = os.pipe()
+        # Non-blocking reads on both ends so we never wedge.
+        for fd in (master_fd, stderr_r):
+            os.set_blocking(fd, False)
         try:
             proc = subprocess.Popen(
-                cmd, stdout=slave_fd, stderr=slave_fd,
+                cmd, stdout=slave_fd, stderr=stderr_w,
                 stdin=subprocess.DEVNULL, close_fds=True,
             )
         except FileNotFoundError:
-            os.close(master_fd); os.close(slave_fd)
-            log.error("llama-cli not found at %s", LLAMA_CLI)
-            return None
+            for fd in (master_fd, slave_fd, stderr_r, stderr_w): _safe_close(fd)
+            return {"error": f"llama-cli not found at {LLAMA_CLI} — run setup/install_ai.sh"}
         except Exception as e:
-            os.close(master_fd); os.close(slave_fd)
-            log.error("AI inference error: %s", e)
-            return None
+            for fd in (master_fd, slave_fd, stderr_r, stderr_w): _safe_close(fd)
+            return {"error": f"Could not start llama-cli: {e}"}
         os.close(slave_fd)   # parent only reads the master side
+        os.close(stderr_w)   # parent only reads stderr_r
 
         collected, buf, done = [], "", False
+        stderr_buf = ""
         deadline = time.time() + TIMEOUT
+        fds = [master_fd, stderr_r]
         try:
             while time.time() < deadline and not done:
                 try:
-                    ready, _, _ = select.select([master_fd], [], [], 1.0)
+                    ready, _, _ = select.select(fds, [], [], 1.0)
                 except (OSError, ValueError):
                     break
                 if not ready:
                     if proc.poll() is not None:
-                        break                              # process gone, no more output
+                        break                              # process gone
                     continue
-                try:
-                    data = os.read(master_fd, 4096)
-                except OSError:
-                    break                                  # PTY closed (EOF)
-                if not data:
-                    break
-                buf += data.decode("utf-8", "replace")
-                while "\n" in buf:
-                    line, buf = buf.split("\n", 1)
-                    if "Generation:" in line and "t/s" in line:
-                        done = True                        # generation stats = done
+                for fd in ready:
+                    try:
+                        data = os.read(fd, 4096)
+                    except (OSError, BlockingIOError):
+                        continue
+                    if fd == stderr_r:
+                        stderr_buf += data.decode("utf-8", "replace")
+                        if len(stderr_buf) > 8000:
+                            stderr_buf = stderr_buf[-8000:]
+                        continue
+                    # stdout (PTY)
+                    if not data:
+                        done = True                        # EOF on stdout
                         break
-                    collected.append(line + "\n")
+                    buf += data.decode("utf-8", "replace")
+                    while "\n" in buf:
+                        line, buf = buf.split("\n", 1)
+                        # Stop early on the end-of-generation perf line if present;
+                        # otherwise we still stop on process exit / EOF above.
+                        if ("Generation:" in line and "t/s" in line) or \
+                           "llama_perf_context_print" in line:
+                            done = True
+                            break
+                        collected.append(line + "\n")
         finally:
             try: proc.kill()
             except Exception: pass
             try: proc.wait(timeout=5)
             except Exception: pass
-            try: os.close(master_fd)
-            except Exception: pass
+            # Drain any remaining stderr (non-blocking).
+            for _ in range(64):
+                try:
+                    d = os.read(stderr_r, 4096)
+                except (OSError, BlockingIOError):
+                    break
+                if not d:
+                    break
+                stderr_buf += d.decode("utf-8", "replace")
+            _safe_close(master_fd); _safe_close(stderr_r)
 
         out = "".join(collected) + buf
-        # The real answer follows the FINAL assistant turn (the prompt is echoed);
-        # rsplit also leaves clean output untouched when there's no marker.
         if "<|assistant|>" in out:
             out = out.rsplit("<|assistant|>", 1)[-1]
         out = out.strip()
@@ -257,26 +340,31 @@ class AIEngine:
             if stop in out:
                 out = out[:out.index(stop)].strip()
         out = re.sub(r"\n?>\s*$", "", out).strip()
-        # Guard: if we only captured the REPL banner (no real answer), fail clearly
-        # instead of returning the banner as the response.
+
         low = out.lower()
-        if not out or "available commands" in low or low.startswith("loading model"):
-            log.warning("AI: only captured REPL banner, no response")
-            return None
-        return out or None
+        is_banner = "available commands" in low or low.startswith("loading model")
+        if out and not is_banner:
+            return {"text": out}
+
+        # No usable answer — surface the real reason from stderr.
+        diag = _diagnose_stderr(stderr_buf)
+        log.warning("AI: no response. stderr tail: %s", stderr_buf[-400:].replace("\n", " "))
+        return {"error": diag}
 
     def _run(self, messages: list, extra_system: str = "") -> dict:
         prompt  = self._build_prompt(messages, extra_system)
         log.debug("AI prompt: %d turns, %d chars (ctx budget: %d tokens)",
                   len(messages), len(prompt), CTX_SIZE)
         t0      = time.time()
-        resp    = self._infer(prompt)
+        result  = self._infer(prompt)
         elapsed = round(time.time() - t0, 1)
-        if resp is None:
-            log.warning("AI inference returned nothing (%.1fs)", elapsed)
-            return {"error": "Inference failed or timed out", "elapsed": elapsed}
-        log.info("AI: %.1fs, %d chars output", elapsed, len(resp))
-        return {"response": resp, "elapsed": elapsed}
+        if "text" not in result:
+            err = result.get("error", "Inference failed or timed out")
+            log.warning("AI inference failed (%.1fs): %s", elapsed, err)
+            return {"error": err, "elapsed": elapsed}
+        text = result["text"]
+        log.info("AI: %.1fs, %d chars output", elapsed, len(text))
+        return {"response": text, "elapsed": elapsed}
 
     def chat(self, messages: list) -> dict:
         if not (_binary_ok() and _model_ok()):

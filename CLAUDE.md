@@ -88,6 +88,23 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 
 ---
 
+## Feature roadmap (in progress — building one phase at a time)
+
+Seven features planned, built in order with a check-in before each phase. Status as of this session: **Phase 1 in progress.**
+
+1. **AI reliability** — the AI assistant wasn't running prompts in the dashboard. NOTE: live-data grounding is *already implemented* in [ai.py](daemon/ai.py) `_live_context()` — it injects network/client/capture/crack counts, security mix, busiest channels, and recent events into every prompt. The problem is inference itself failing. Fix: capture llama-cli stderr for real diagnostics, fix context-budget overflow (ctx-size vs. prompt size), surface real errors to the dashboard, add a frontend timeout.
+2. **OUI + device fingerprinting** — bundle the IEEE OUI DB locally (~3MB), add a `fingerprint.py` resolver, enrich vendor lookups in `scanner.py`/`wifiscan.py`, add `device_type` columns + frontend icons. Done early because it improves data quality for every later phase.
+3. **GPS + Wardrive mode** — new `gps.py` (gpsd or raw NMEA from USB dongle), `lat`/`lon`/`accuracy` columns on networks + a `wardrive_track` table, config section, Leaflet offline map view.
+4. **Bluetooth scanning** — new `ble.py` (bettercap `ble.recon` or `bluetoothctl`), new `bluetooth` DB table, new dashboard view. Uses the otherwise-idle BT radio.
+5. **Password intelligence** — new `passwords.py`: strength scoring, pattern detection (keyboard walks, year suffixes, vendor defaults), cross-network reuse detection. Feeds the AI analyze tab.
+6. **Optional encrypted capture storage** — encrypt `.pcapng` at rest in `capture.py`, PIN-derived key shown on e-ink. Last because the crack queue needs plaintext, so it must interoperate with `cracker.py`.
+
+### Architecture notes discovered this session
+- Daemon has grown beyond the README: also `wifiscan.py` (managed-mode AP scanner, no monitor mode needed), `topology.py` (L3/VLAN via traceroute + SNMP), `netcfg.py` (WiFi join from dashboard).
+- DB schema + helpers live in [db.py](daemon/db.py); add columns via the idempotent `ALTER TABLE` block in `init()`.
+- API endpoints are all in [api.py](daemon/api.py) `create_app()`; shared objects passed via the `state` dict from [radioman.py](daemon/radioman.py).
+- Frontend is a single [dashboard.js](web/assets/js/dashboard.js) with a 5s poll loop; `get()`/`post()` helpers have no timeout.
+
 ## Monitor mode plan
 
 Getting monitor mode on the BCM43430A1 with Ubuntu is the main open question. Three stages:

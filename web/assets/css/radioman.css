@@ -200,14 +200,21 @@ body {
   color: var(--aap-muted);
 }
 
-.rm-spinner {
-  width: 28px;
-  height: 28px;
-  border: 2px solid var(--aap-line);
-  border-top-color: var(--rm-teal);
-  border-radius: 50%;
-  animation: rm-spin 0.8s linear infinite;
+.rm-wifi-loader {
+  width: 52px;
+  height: 39px;
+  color: var(--rm-teal);
 }
+
+@keyframes rm-wifi-pulse {
+  0%, 100% { opacity: 0.15; }
+  50%       { opacity: 1;    }
+}
+
+.rm-wifi-dot   { animation: rm-wifi-pulse 1.4s ease-in-out infinite 0s;    }
+.rm-wifi-arc-1 { animation: rm-wifi-pulse 1.4s ease-in-out infinite 0.2s;  }
+.rm-wifi-arc-2 { animation: rm-wifi-pulse 1.4s ease-in-out infinite 0.4s;  }
+.rm-wifi-arc-3 { animation: rm-wifi-pulse 1.4s ease-in-out infinite 0.6s;  }
 
 @keyframes rm-spin { to { transform: rotate(360deg); } }
 

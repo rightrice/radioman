@@ -50,14 +50,29 @@ async function get(path) {
   if (!r.ok) throw new Error(r.statusText);
   return r.json();
 }
-async function post(path, body = {}) {
-  const r = await fetch(API + path, {
+async function post(path, body = {}, timeoutMs = 0) {
+  const opts = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
-  return r.json();
+  };
+  let timer;
+  if (timeoutMs > 0) {
+    const ctrl = new AbortController();
+    opts.signal = ctrl.signal;
+    timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  }
+  try {
+    const r = await fetch(API + path, opts);
+    return r.json();
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
+
+// AI inference can take minutes on the Pi Zero 2W — keep the client just above
+// the daemon's 300s inference timeout so the daemon's error wins the race.
+const AI_TIMEOUT_MS = 315000;
 
 function setStatus(ok) {
   const dot = document.getElementById("rmStatusDot");
@@ -1863,7 +1878,7 @@ async function aiSend(messages) {
   setAIInputsDisabled(true);
   renderAIThinking(true);
   try {
-    const result = await post("/api/ai/chat", { messages });
+    const result = await post("/api/ai/chat", { messages }, AI_TIMEOUT_MS);
     renderAIThinking(false);
     if (result.error) {
       appendAIBubble("assistant", `Error: ${result.error}`);
@@ -1882,7 +1897,9 @@ async function aiSend(messages) {
     }
   } catch (e) {
     renderAIThinking(false);
-    appendAIBubble("assistant", "Network error — is radioman running?");
+    appendAIBubble("assistant", e.name === "AbortError"
+      ? "Timed out after 5 minutes — the Pi may be busy. Try again with scanning/cracking paused."
+      : "Network error — is radioman running?");
   } finally {
     setAIInputsDisabled(false);
     scrollAIChat();
@@ -1901,7 +1918,7 @@ function attachAIHandlers() {
       setAIInputsDisabled(true);
       renderAIThinking(true);
       try {
-        const result = await post("/api/ai/analyze", { type });
+        const result = await post("/api/ai/analyze", { type }, AI_TIMEOUT_MS);
         renderAIThinking(false);
         const resp = result.response || result.error || "(no response)";
         appendAIBubble("assistant", resp);
@@ -1915,7 +1932,9 @@ function attachAIHandlers() {
         }
       } catch (e) {
         renderAIThinking(false);
-        appendAIBubble("assistant", "Request failed.");
+        appendAIBubble("assistant", e.name === "AbortError"
+          ? "Timed out after 5 minutes — the Pi may be busy. Try again with scanning/cracking paused."
+          : "Request failed.");
       } finally {
         setAIInputsDisabled(false);
         scrollAIChat();
