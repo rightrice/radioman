@@ -155,8 +155,8 @@ function renderMain(status, data, xplt = null) {
       attachXpltHandler(); attachScanToggle();
       break;
     }
-    case "networks":  main.innerHTML = viewNetworks(data || []); attachIgnoreHandlers(); break;
-    case "clients":   main.innerHTML = viewClients(data || []); break;
+    case "networks":  main.innerHTML = viewNetworks(data || []); attachIgnoreHandlers(); attachDeleteHandlers(); break;
+    case "clients":   main.innerHTML = viewClients(data || []); attachDeleteHandlers(); break;
     case "captures":  main.innerHTML = viewCaptures(data || []); attachCrackHandlers(); break;
     case "graph": {
       // Build the canvas once; subsequent polls only feed new data (no flash,
@@ -465,6 +465,7 @@ function viewNetworks(rows) {
   return `
     <div class="rm-action-bar">
       <span class="rm-muted">${rows.length} network${rows.length !== 1 ? "s" : ""} discovered</span>
+      <button class="rm-purge-btn" id="rmPurgeNetworks" title="Delete networks not seen in 7+ days">Purge stale (7d)</button>
     </div>
     <div class="dash-panel dash-panel-full">
       <div class="dash-table-scroll">
@@ -485,7 +486,10 @@ function viewNetworks(rows) {
                 <td>${secBadge(r.security)}</td>
                 <td>${r.clients ?? 0}</td>
                 <td class="rm-muted">${shortDate(r.last_seen)}</td>
-                <td><button class="rm-ignore-btn" data-bssid="${esc(r.bssid)}" title="Add to ignore list">Ignore</button></td>
+                <td class="rm-row-actions">
+                  <button class="rm-ignore-btn" data-bssid="${esc(r.bssid)}" title="Add to ignore list">Ignore</button>
+                  <button class="rm-delete-btn rm-delete-network" data-bssid="${esc(r.bssid)}" title="Delete this network record">Delete</button>
+                </td>
               </tr>`; }).join("")}
           </tbody>
         </table>
@@ -504,7 +508,7 @@ function viewClients(rows) {
       <div class="dash-table-scroll">
         <table class="dash-table">
           <thead><tr>
-            <th>MAC</th><th>Associated AP</th><th>Vendor</th><th>Signal</th><th>Last Seen</th>
+            <th>MAC</th><th>Associated AP</th><th>Vendor</th><th>Signal</th><th>Last Seen</th><th></th>
           </tr></thead>
           <tbody>
             ${rows.map(r => `
@@ -514,6 +518,7 @@ function viewClients(rows) {
                 <td>${esc(r.vendor || "—")}</td>
                 <td>${rssiCell(r.rssi)}</td>
                 <td class="rm-muted">${shortDate(r.last_seen)}</td>
+                <td><button class="rm-delete-btn rm-delete-client" data-mac="${esc(r.mac)}" title="Delete this client record">Delete</button></td>
               </tr>`).join("")}
           </tbody>
         </table>
@@ -1073,6 +1078,57 @@ function attachIgnoreHandlers() {
       }
     });
   });
+}
+
+function attachDeleteHandlers() {
+  document.querySelectorAll(".rm-delete-network").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const bssid = btn.dataset.bssid;
+      if (!confirm(`Delete network ${bssid} and all its records?\nThis cannot be undone.`)) return;
+      btn.textContent = "Deleting…";
+      btn.disabled = true;
+      try {
+        await del(`/api/networks/${encodeURIComponent(bssid)}`);
+        btn.closest("tr").remove();
+      } catch (e) {
+        btn.textContent = "Error";
+        btn.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll(".rm-delete-client").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const mac = btn.dataset.mac;
+      if (!confirm(`Delete client ${mac}?\nThis cannot be undone.`)) return;
+      btn.textContent = "Deleting…";
+      btn.disabled = true;
+      try {
+        await del(`/api/clients/${encodeURIComponent(mac)}`);
+        btn.closest("tr").remove();
+      } catch (e) {
+        btn.textContent = "Error";
+        btn.disabled = false;
+      }
+    });
+  });
+
+  const purgeBtn = document.getElementById("rmPurgeNetworks");
+  if (purgeBtn) {
+    purgeBtn.addEventListener("click", async () => {
+      if (!confirm("Delete all networks not seen in the last 7 days?\nTheir clients and signal history will also be removed.")) return;
+      purgeBtn.textContent = "Purging…";
+      purgeBtn.disabled = true;
+      try {
+        const res = await post("/api/networks/purge", { days: 7 });
+        purgeBtn.textContent = `Purged ${res.purged ?? 0}`;
+        poll();
+      } catch (e) {
+        purgeBtn.textContent = "Error";
+        purgeBtn.disabled = false;
+      }
+    });
+  }
 }
 
 async function del(path) {

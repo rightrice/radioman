@@ -89,10 +89,32 @@ def create_app(state: dict) -> Flask:
     def networks():
         return jsonify(_db.get_networks(_db_path()))
 
+    @app.route("/api/networks/purge", methods=["POST"])
+    def purge_networks():
+        data = request.json or {}
+        days = max(1, int(data.get("days", 7)))
+        count = _db.purge_stale_networks(_db_path(), days)
+        _db.log_event(_db_path(), "info", f"Purged {count} stale networks (>{days}d)")
+        return jsonify({"purged": count})
+
+    @app.route("/api/networks/<bssid>", methods=["DELETE"])
+    def delete_network(bssid: str):
+        removed = _db.delete_network(_db_path(), bssid.upper())
+        if removed:
+            _db.log_event(_db_path(), "info", f"Deleted network: {bssid.upper()}")
+        return jsonify({"removed": removed, "bssid": bssid.upper()})
+
     # ── Clients ───────────────────────────────────────────────────────────────
     @app.route("/api/clients")
     def clients():
         return jsonify(_db.get_clients(_db_path()))
+
+    @app.route("/api/clients/<mac>", methods=["DELETE"])
+    def delete_client(mac: str):
+        removed = _db.delete_client(_db_path(), mac.upper())
+        if removed:
+            _db.log_event(_db_path(), "info", f"Deleted client: {mac.upper()}")
+        return jsonify({"removed": removed, "mac": mac.upper()})
 
     # ── Captures ──────────────────────────────────────────────────────────────
     @app.route("/api/captures")

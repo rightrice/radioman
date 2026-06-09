@@ -333,6 +333,41 @@ def remove_ignored(path: str, bssid: str) -> bool:
     return cur.rowcount > 0
 
 
+def delete_network(path: str, bssid: str) -> bool:
+    bssid = bssid.upper().strip()
+    conn = get_conn(path)
+    conn.execute("DELETE FROM rssi_history WHERE bssid=?", (bssid,))
+    conn.execute("DELETE FROM clients WHERE bssid=?", (bssid,))
+    cur = conn.execute("DELETE FROM networks WHERE bssid=?", (bssid,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def delete_client(path: str, mac: str) -> bool:
+    mac = mac.upper().strip()
+    conn = get_conn(path)
+    cur = conn.execute("DELETE FROM clients WHERE mac=?", (mac,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def purge_stale_networks(path: str, days: int = 7) -> int:
+    conn = get_conn(path)
+    bssids = [r[0] for r in conn.execute(
+        "SELECT bssid FROM networks WHERE last_seen < datetime('now', ?)",
+        (f"-{days} days",)
+    ).fetchall()]
+    for bssid in bssids:
+        conn.execute("DELETE FROM rssi_history WHERE bssid=?", (bssid,))
+        conn.execute("DELETE FROM clients WHERE bssid=?", (bssid,))
+    cur = conn.execute(
+        "DELETE FROM networks WHERE last_seen < datetime('now', ?)",
+        (f"-{days} days",)
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def get_ignored(path: str) -> list:
     conn = get_conn(path)
     rows = conn.execute(
