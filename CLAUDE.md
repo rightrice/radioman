@@ -44,12 +44,13 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 
 - Ubuntu Server 24.04 LTS arm64 flashed and booted
 - WiFi connected and working (NetworkManager, static IP pre-configured via NM profile)
-- Swap set up manually (2GB swapfile at `/swapfile`)
-- zram enabled
+- Swap set up manually (2GB swapfile at `/swapfile`); zram enabled
 - GUI / display manager confirmed absent (`multi-user.target`)
-- `kali-desktop-xfce` and `lightdm` purged
-- Unnecessary services disabled: `bluetooth`, `ModemManager`, `cups`, `apt-daily.timer`
-- **radioman repo not yet cloned to the Pi** — this is the next step
+- Unnecessary services disabled
+- radioman repo **cloned to the Pi**, `setup/install.sh` has been run
+- bettercap and aircrack-ng installed (aircrack built from source → `/usr/local/bin`)
+- **Monitor mode: not yet confirmed working** — still the main open hardware question (see Monitor mode plan)
+- **AI: Phase 1 fix is in the repo but not yet verified on the Pi** — run the verification block below after `git pull && sudo bash setup/update.sh`
 
 ---
 
@@ -61,6 +62,7 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 - **nexmon**: Kali → `apt install brcmfmac-nexmon-dkms`; Ubuntu → calls `install_monitor.sh` to build from source
 - **libpcap**: tries `libpcap0.8` then `libpcap0.8t64` (Ubuntu 24.04 renamed it)
 - **wordlists**: Kali apt package → wget from GitHub as fallback for Ubuntu
+- security tools loop also ensures `traceroute` + `snmp` (snmpwalk) are present for the L3 topology view
 - `apt upgrade` is `DEBIAN_FRONTEND=noninteractive` (no hanging prompts on headless)
 - `dphys-swapfile` skipped on Ubuntu (Raspberry Pi OS only); manual swapfile used instead
 - Boot config paths: tries `/boot/firmware/config.txt` (Ubuntu) then `/boot/config.txt` (Kali/Pi OS)
@@ -69,6 +71,8 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 ### `setup/install_monitor.sh` — full rewrite
 - OS-aware: Kali uses apt package, Ubuntu builds nexmon from source
 - Ubuntu path: installs build deps, clones nexmon to `/opt/nexmon-src`, builds BCM43430A1 patch, registers as DKMS module
+- **aarch64 toolchain fix**: nexmon ships a prebuilt `arm-none-eabi-gcc` built for armv7l (32-bit), which can't execute on arm64 Ubuntu. The script installs the system `gcc-arm-none-eabi` and symlinks the bundled toolchain binaries to the system ones before building.
+- Picks the patched brcmfmac driver source closest to (but not newer than) the running kernel
 - Falls back with explicit manual instructions if DKMS source directory can't be located
 - Chip: `bcm43430a1`, firmware version: `7_45_41_46`
 
@@ -86,24 +90,53 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 - Cross-compiles llama-cli for aarch64 from Ubuntu laptop (same as WSL script, just labeled ubuntu-build)
 - Usage: `bash scripts/build_llama_ubuntu.sh [radioman.local]`
 
+### `daemon/ai.py` + `web/assets/js/dashboard.js` — Phase 1 AI reliability fix
+- **Root cause:** llama-cli's stderr (the real error) was merged into the PTY and discarded, so every failure surfaced as a generic "Inference failed."
+- `_infer()` now captures stderr on a **separate pipe**, returns a diagnostic dict (`{"text"}` or `{"error"}`), and a new `_diagnose_stderr()` maps stderr to a real cause (rejected CLI flag, model-load failure, wrong CPU arch, OOM). Removed `--log-disable` so stderr carries those logs.
+- `CTX_SIZE` 1024 → 2048, and `_build_prompt()` trims oldest turns if the prompt would overflow the window (an "Analyze Networks" prompt + live context could exceed 1024 and produce nothing).
+- Completion detection no longer relies solely on the old `"Generation:"` log line — falls back to process-exit/EOF.
+- Frontend: `post()` takes an optional timeout; AI calls use a 315s `AbortController` (just above the 300s daemon timeout) with distinct "timed out" vs "network error" messages.
+
 ---
 
 ## Feature roadmap (in progress — building one phase at a time)
 
-Seven features planned, built in order with a check-in before each phase. Status as of this session: **Phase 1 in progress.**
+Six features planned (the user's list double-counted GPS), built in order with a check-in before each phase. User chose **"go in order, one at a time."** Status: **Phase 1 done (code complete, needs Pi verification). Phase 2 is next.**
 
-1. **AI reliability** — the AI assistant wasn't running prompts in the dashboard. NOTE: live-data grounding is *already implemented* in [ai.py](daemon/ai.py) `_live_context()` — it injects network/client/capture/crack counts, security mix, busiest channels, and recent events into every prompt. The problem is inference itself failing. Fix: capture llama-cli stderr for real diagnostics, fix context-budget overflow (ctx-size vs. prompt size), surface real errors to the dashboard, add a frontend timeout.
+1. ✅ **AI reliability** — DONE in code (see `daemon/ai.py` + `dashboard.js` notes above). Live-data grounding was *already implemented* in `_live_context()`; the blocker was inference failing silently. Still needs verifying on the Pi — see "Verifying Phase 1" below.
 2. **OUI + device fingerprinting** — bundle the IEEE OUI DB locally (~3MB), add a `fingerprint.py` resolver, enrich vendor lookups in `scanner.py`/`wifiscan.py`, add `device_type` columns + frontend icons. Done early because it improves data quality for every later phase.
 3. **GPS + Wardrive mode** — new `gps.py` (gpsd or raw NMEA from USB dongle), `lat`/`lon`/`accuracy` columns on networks + a `wardrive_track` table, config section, Leaflet offline map view.
 4. **Bluetooth scanning** — new `ble.py` (bettercap `ble.recon` or `bluetoothctl`), new `bluetooth` DB table, new dashboard view. Uses the otherwise-idle BT radio.
 5. **Password intelligence** — new `passwords.py`: strength scoring, pattern detection (keyboard walks, year suffixes, vendor defaults), cross-network reuse detection. Feeds the AI analyze tab.
 6. **Optional encrypted capture storage** — encrypt `.pcapng` at rest in `capture.py`, PIN-derived key shown on e-ink. Last because the crack queue needs plaintext, so it must interoperate with `cracker.py`.
 
-### Architecture notes discovered this session
+### Architecture notes (how to add a feature)
 - Daemon has grown beyond the README: also `wifiscan.py` (managed-mode AP scanner, no monitor mode needed), `topology.py` (L3/VLAN via traceroute + SNMP), `netcfg.py` (WiFi join from dashboard).
-- DB schema + helpers live in [db.py](daemon/db.py); add columns via the idempotent `ALTER TABLE` block in `init()`.
-- API endpoints are all in [api.py](daemon/api.py) `create_app()`; shared objects passed via the `state` dict from [radioman.py](daemon/radioman.py).
-- Frontend is a single [dashboard.js](web/assets/js/dashboard.js) with a 5s poll loop; `get()`/`post()` helpers have no timeout.
+- DB schema + helpers live in [db.py](daemon/db.py); add columns via the idempotent `ALTER TABLE` block in `init()`, and add `get_*`/`upsert_*` helpers alongside the existing ones.
+- API endpoints are all in [api.py](daemon/api.py) `create_app()`; shared objects (engines, db_path, config) are passed via the `state` dict assembled in [radioman.py](daemon/radioman.py) `__init__` and `start()`.
+- New daemon subsystems are instantiated in `Radioman.__init__`, started in `Radioman.start()`, added to `self._state`, and stopped in `Radioman.stop()`.
+- Frontend is a single [dashboard.js](web/assets/js/dashboard.js): a 5s `poll()` loop, a `currentView` switch in `fetchViewData()`, per-view `view*()` render functions, and nav buttons in [index.html](web/index.html). `post()` now takes an optional timeout (ms).
+- Config is INI via `configparser`; sections are read in `Radioman.__init__` and the example lives in [config/radioman.conf.example](config/radioman.conf.example). `api.py` `_save_conf()` persists settings changed from the dashboard.
+
+### Verifying Phase 1 on the Pi (do this before/while starting Phase 2)
+```bash
+cd ~/radioman && git pull && sudo bash setup/update.sh
+file /opt/radioman/llama/llama-cli          # must say ARM aarch64
+# run with radioman's exact flags:
+/opt/radioman/llama/llama-cli \
+  --model /opt/radioman/models/granite-4.0-350m-Q4_K_M.gguf \
+  --ctx-size 2048 --threads 4 --n-predict 32 -no-cnv --no-display-prompt \
+  --prompt "Say hello in five words."
+sudo systemctl restart radioman
+```
+If a flag is rejected, the new `_diagnose_stderr()` will now name it in the dashboard — adjust the flag list in `ai.py` `_infer()`. If it generates text, the AI tab should work.
+
+### Phase 2 starting point (OUI + device fingerprinting)
+- New `daemon/fingerprint.py`: load a bundled IEEE OUI file (ship `data/oui.txt` or a trimmed CSV, ~3MB), expose `vendor_for(mac)` and `device_type_for(mac, vendor, ssid)`.
+- Wire it into the existing vendor lookup — `scanner.py` already has `_vendor_for` (passed to `WifiScanner` as `vendor_lookup` in `radioman.py`); replace/augment that.
+- DB: add `device_type` column to `networks` and `clients` via the `ALTER TABLE` block in `db.py` `init()`.
+- Frontend: device-type icons in the networks/clients tables.
+- Install: drop the OUI data file into place in `install.sh`/`update.sh` (or fetch it once).
 
 ## Monitor mode plan
 
