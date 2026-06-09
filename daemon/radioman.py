@@ -16,6 +16,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
 import db
+import fingerprint
 import battery as bat
 from personality import PersonalityEngine
 from display import Display
@@ -168,7 +169,9 @@ class Radioman:
         if db.is_ignored(self._db_path, bssid):
             log.debug("Ignored AP: %s (%s)", bssid, ssid)
             return
-        is_new = db.upsert_network(self._db_path, bssid, ssid, channel, rssi, security, vendor)
+        device_type = fingerprint.device_type_for(bssid, vendor, ssid, is_ap=True)
+        is_new = db.upsert_network(self._db_path, bssid, ssid, channel, rssi,
+                                   security, vendor, device_type)
         log.debug("AP: %-17s  ch%-3d  %4ddBm  %-6s  %s  [%s]",
                   bssid, channel, rssi, security, ssid or "(hidden)", vendor or "?")
         # Only announce genuinely new APs — re-sightings every scan would spam.
@@ -179,17 +182,21 @@ class Radioman:
     def _on_client(self, mac, bssid, rssi, vendor):
         if bssid and db.is_ignored(self._db_path, bssid):
             return
-        db.upsert_client(self._db_path, mac, bssid, rssi, vendor)
-        log.debug("Client: %s → %s  %ddBm  [%s]", mac, bssid or "probe", rssi, vendor or "?")
+        device_type = fingerprint.device_type_for(mac, vendor, "", is_ap=False)
+        db.upsert_client(self._db_path, mac, bssid, rssi, vendor, device_type)
+        log.debug("Client: %s → %s  %ddBm  [%s/%s]", mac, bssid or "probe", rssi,
+                  vendor or "?", device_type)
 
     def _on_host(self, host):
         ip = host.get("ip", "")
         if not ip:
             return
+        device_type = fingerprint.device_type_for(
+            host.get("mac", ""), host.get("vendor", ""), host.get("hostname", ""))
         is_new = db.upsert_host(
             self._db_path, ip,
             host.get("mac", ""), host.get("vendor", ""),
-            host.get("hostname", ""), host.get("method", "arp"),
+            host.get("hostname", ""), host.get("method", "arp"), device_type,
         )
         if is_new:
             label = host.get("hostname") or host.get("vendor") or host.get("mac") or ip

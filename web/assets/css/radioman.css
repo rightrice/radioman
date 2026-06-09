@@ -1205,3 +1205,6 @@ select.rm-ignore-input { max-width: 460px; cursor: pointer; }
 .rm-graph-legend .rm-legend-router::before { background: #fb923c; }
 .rm-graph-legend .rm-legend-subnet::before { background: #a78bfa; }
 .rm-graph-discover { padding: 0.35rem 0.8rem; font-size: 0.78rem; }
+
+/* ── Device-type icons (fingerprinting) ──────────────────────── */
+.rm-dev { display: inline-block; margin-right: 0.15rem; font-size: 0.85em; cursor: default; }

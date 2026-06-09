@@ -101,10 +101,10 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 
 ## Feature roadmap (in progress — building one phase at a time)
 
-Six features planned (the user's list double-counted GPS), built in order with a check-in before each phase. User chose **"go in order, one at a time."** Status: **Phase 1 done (code complete, needs Pi verification). Phase 2 is next.**
+Six features planned (the user's list double-counted GPS), built in order with a check-in before each phase. User chose **"go in order, one at a time."** Status: **Phases 1 & 2 done (code complete, need Pi verification). Phase 3 is next.**
 
 1. ✅ **AI reliability** — DONE in code (see `daemon/ai.py` + `dashboard.js` notes above). Live-data grounding was *already implemented* in `_live_context()`; the blocker was inference failing silently. Still needs verifying on the Pi — see "Verifying Phase 1" below.
-2. **OUI + device fingerprinting** — bundle the IEEE OUI DB locally (~3MB), add a `fingerprint.py` resolver, enrich vendor lookups in `scanner.py`/`wifiscan.py`, add `device_type` columns + frontend icons. Done early because it improves data quality for every later phase.
+2. ✅ **OUI + device fingerprinting** — DONE in code. New `daemon/fingerprint.py` `device_type_for(mac, vendor, ssid, is_ap)` classifies a coarse device type (router/phone/computer/iot/tv/printer/camera/voip/wearable/gaming/sbc/unknown) from the resolved vendor string + SSID hints + randomized-MAC detection. **Decision:** did NOT bundle a 3MB OUI file — vendor lookup already works via nmap's `nmap-mac-prefixes` (a dependency) in `scanner.py` `_load_oui`, so `fingerprint.py` classifies that vendor string instead. Wired into `radioman.py` `_on_network`/`_on_client`/`_on_host`; `device_type` column added to `networks`/`clients`/`hosts` (idempotent `ALTER TABLE`); `dashboard.js` shows a `deviceTag()` icon in the Networks/Clients/LAN-Hosts tables.
 3. **GPS + Wardrive mode** — new `gps.py` (gpsd or raw NMEA from USB dongle), `lat`/`lon`/`accuracy` columns on networks + a `wardrive_track` table, config section, Leaflet offline map view.
 4. **Bluetooth scanning** — new `ble.py` (bettercap `ble.recon` or `bluetoothctl`), new `bluetooth` DB table, new dashboard view. Uses the otherwise-idle BT radio.
 5. **Password intelligence** — new `passwords.py`: strength scoring, pattern detection (keyboard walks, year suffixes, vendor defaults), cross-network reuse detection. Feeds the AI analyze tab.
@@ -131,12 +131,19 @@ sudo systemctl restart radioman
 ```
 If a flag is rejected, the new `_diagnose_stderr()` will now name it in the dashboard — adjust the flag list in `ai.py` `_infer()`. If it generates text, the AI tab should work.
 
-### Phase 2 starting point (OUI + device fingerprinting)
-- New `daemon/fingerprint.py`: load a bundled IEEE OUI file (ship `data/oui.txt` or a trimmed CSV, ~3MB), expose `vendor_for(mac)` and `device_type_for(mac, vendor, ssid)`.
-- Wire it into the existing vendor lookup — `scanner.py` already has `_vendor_for` (passed to `WifiScanner` as `vendor_lookup` in `radioman.py`); replace/augment that.
-- DB: add `device_type` column to `networks` and `clients` via the `ALTER TABLE` block in `db.py` `init()`.
-- Frontend: device-type icons in the networks/clients tables.
-- Install: drop the OUI data file into place in `install.sh`/`update.sh` (or fetch it once).
+### Verifying Phase 2 on the Pi
+After `git pull && sudo bash setup/update.sh && sudo systemctl restart radioman`:
+- DB migrates automatically (the `ALTER TABLE … device_type` lines are idempotent; existing rows backfill on next sighting).
+- Networks/Clients/LAN-Hosts tables should show a device-type emoji next to each row. Run the internal WiFi scan (it's always on via `wifiscan.py`) or an nmap host scan to populate, then check the icons.
+- Classification is a best-effort hint; tune the rule lists in `daemon/fingerprint.py` (`_VENDOR_RULES` / `_SSID_RULES`) as needed.
+
+### Phase 3 starting point (GPS + Wardrive mode)
+- New `daemon/gps.py`: read from gpsd (`gpsd` + `python3-gps`) if present, else parse raw NMEA from a serial/USB dongle (`/dev/ttyACM0`/`/dev/ttyUSB0`, pyserial). Expose a thread-safe `current_fix()` → `{lat, lon, alt, accuracy, fix, ts}`.
+- DB: add `lat`/`lon`/`gps_accuracy` columns to `networks` (and `clients`?) via the `ALTER TABLE` block; new `wardrive_track` table (ts, lat, lon, alt, speed) for the breadcrumb trail.
+- Stamp the current fix onto each AP in `radioman.py` `_on_network` (and into `wardrive_track` on a timer).
+- Config: `[gps]` section (mode = gpsd|serial|off, device, baud). Add to `radioman.conf.example`.
+- Frontend: a Leaflet map view (offline tiles or OSM), networks plotted by strongest-RSSI fix, the track drawn as a polyline. New nav tab + `viewMap()` + `/api/wardrive` endpoint.
+- Hardware: needs a USB GPS dongle (u-blox etc.). Until one's attached, everything degrades to "no fix" gracefully.
 
 ## Monitor mode plan
 

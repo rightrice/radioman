@@ -87,11 +87,14 @@ def init(path: str):
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
         CREATE INDEX IF NOT EXISTS idx_rssi_bssid_ts ON rssi_history(bssid, ts);
     """)
-    # Add xplt_synced tracking columns to existing tables (safe on re-run)
+    # Add columns to existing tables (safe on re-run — fails silently if present)
     for col_sql in [
         "ALTER TABLE networks ADD COLUMN xplt_synced INTEGER DEFAULT 0",
         "ALTER TABLE clients  ADD COLUMN xplt_synced INTEGER DEFAULT 0",
         "ALTER TABLE captures ADD COLUMN xplt_synced INTEGER DEFAULT 0",
+        "ALTER TABLE networks ADD COLUMN device_type TEXT DEFAULT ''",
+        "ALTER TABLE clients  ADD COLUMN device_type TEXT DEFAULT ''",
+        "ALTER TABLE hosts    ADD COLUMN device_type TEXT DEFAULT ''",
     ]:
         try:
             conn.execute(col_sql)
@@ -101,21 +104,25 @@ def init(path: str):
 
 
 def upsert_network(path: str, bssid: str, ssid: str, channel: int,
-                   rssi: int, security: str, vendor: str = "") -> bool:
-    """Insert or update an AP. Returns True if this BSSID was newly seen."""
+                   rssi: int, security: str, vendor: str = "",
+                   device_type: str = "") -> bool:
+    """Insert or update an AP. Returns True if this BSSID was newly seen.
+    Non-empty vendor/device_type never overwrite an existing value with a blank."""
     now = datetime.utcnow().isoformat()
     conn = get_conn(path)
     is_new = conn.execute("SELECT 1 FROM networks WHERE bssid=?", (bssid,)).fetchone() is None
     conn.execute("""
-        INSERT INTO networks (bssid, ssid, channel, rssi, security, vendor, first_seen, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO networks (bssid, ssid, channel, rssi, security, vendor, device_type, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(bssid) DO UPDATE SET
             ssid=excluded.ssid,
             channel=excluded.channel,
             rssi=excluded.rssi,
             security=excluded.security,
+            vendor=CASE WHEN excluded.vendor != '' THEN excluded.vendor ELSE networks.vendor END,
+            device_type=CASE WHEN excluded.device_type != '' THEN excluded.device_type ELSE networks.device_type END,
             last_seen=excluded.last_seen
-    """, (bssid, ssid, channel, rssi, security, vendor, now, now))
+    """, (bssid, ssid, channel, rssi, security, vendor, device_type, now, now))
     conn.execute(
         "INSERT INTO rssi_history (bssid, rssi, ts) VALUES (?, ?, ?)",
         (bssid, rssi, now),
@@ -124,17 +131,20 @@ def upsert_network(path: str, bssid: str, ssid: str, channel: int,
     return is_new
 
 
-def upsert_client(path: str, mac: str, bssid: str, rssi: int, vendor: str = ""):
+def upsert_client(path: str, mac: str, bssid: str, rssi: int, vendor: str = "",
+                  device_type: str = ""):
     now = datetime.utcnow().isoformat()
     conn = get_conn(path)
     conn.execute("""
-        INSERT INTO clients (mac, bssid, rssi, vendor, first_seen, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO clients (mac, bssid, rssi, vendor, device_type, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(mac) DO UPDATE SET
             bssid=excluded.bssid,
             rssi=excluded.rssi,
+            vendor=CASE WHEN excluded.vendor != '' THEN excluded.vendor ELSE clients.vendor END,
+            device_type=CASE WHEN excluded.device_type != '' THEN excluded.device_type ELSE clients.device_type END,
             last_seen=excluded.last_seen
-    """, (mac, bssid, rssi, vendor, now, now))
+    """, (mac, bssid, rssi, vendor, device_type, now, now))
     conn.execute("""
         UPDATE networks SET clients = (
             SELECT COUNT(*) FROM clients WHERE bssid = ?
@@ -144,22 +154,23 @@ def upsert_client(path: str, mac: str, bssid: str, rssi: int, vendor: str = ""):
 
 
 def upsert_host(path: str, ip: str, mac: str = "", vendor: str = "",
-                hostname: str = "", method: str = "arp") -> bool:
+                hostname: str = "", method: str = "arp", device_type: str = "") -> bool:
     """Insert or update a LAN host. Returns True if this IP was newly seen.
     Non-empty fields never overwrite an existing value with a blank."""
     now = datetime.utcnow().isoformat()
     conn = get_conn(path)
     is_new = conn.execute("SELECT 1 FROM hosts WHERE ip=?", (ip,)).fetchone() is None
     conn.execute("""
-        INSERT INTO hosts (ip, mac, vendor, hostname, method, first_seen, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO hosts (ip, mac, vendor, hostname, method, device_type, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(ip) DO UPDATE SET
-            mac      = CASE WHEN excluded.mac      != '' THEN excluded.mac      ELSE hosts.mac      END,
-            vendor   = CASE WHEN excluded.vendor   != '' THEN excluded.vendor   ELSE hosts.vendor   END,
-            hostname = CASE WHEN excluded.hostname != '' THEN excluded.hostname ELSE hosts.hostname END,
+            mac         = CASE WHEN excluded.mac         != '' THEN excluded.mac         ELSE hosts.mac         END,
+            vendor      = CASE WHEN excluded.vendor      != '' THEN excluded.vendor      ELSE hosts.vendor      END,
+            hostname    = CASE WHEN excluded.hostname    != '' THEN excluded.hostname    ELSE hosts.hostname    END,
+            device_type = CASE WHEN excluded.device_type != '' THEN excluded.device_type ELSE hosts.device_type END,
             method   = excluded.method,
             last_seen = excluded.last_seen
-    """, (ip, mac, vendor, hostname, method, now, now))
+    """, (ip, mac, vendor, hostname, method, device_type, now, now))
     conn.commit()
     return is_new
 

@@ -450,6 +450,16 @@ function pct2bar(v) {
 }
 
 // ── Networks ──────────────────────────────────────────────────────────────────
+const DEVICE_ICONS = {
+  router: "📡", phone: "📱", computer: "💻", iot: "💡", tv: "📺",
+  printer: "🖨", camera: "📷", voip: "☎️", wearable: "⌚",
+  gaming: "🎮", sbc: "📟",
+};
+function deviceTag(type) {
+  const ic = DEVICE_ICONS[type];
+  return ic ? `<span class="rm-dev" title="${esc(type)}">${ic}</span> ` : "";
+}
+
 function viewNetworks(rows) {
   if (!rows.length) return empty("📶", "No networks discovered yet");
   return `
@@ -468,7 +478,7 @@ function viewNetworks(rows) {
               const mine = MY_BSSID && (r.bssid || "").toUpperCase() === MY_BSSID;
               return `
               <tr class="${mine ? "rm-row-mine" : ""}">
-                <td class="rm-table-ssid">${mine ? '<span class="rm-mine-star" title="Your network">★</span> ' : ""}${esc(r.ssid || "—")}</td>
+                <td class="rm-table-ssid">${mine ? '<span class="rm-mine-star" title="Your network">★</span> ' : ""}${deviceTag(r.device_type)}${esc(r.ssid || "—")}</td>
                 <td class="rm-table-bssid rm-mono">${esc(r.bssid)}</td>
                 <td>${r.channel ?? "—"}</td>
                 <td>${rssiCell(r.rssi)}</td>
@@ -499,7 +509,7 @@ function viewClients(rows) {
           <tbody>
             ${rows.map(r => `
               <tr>
-                <td class="rm-mono">${esc(r.mac)}</td>
+                <td class="rm-mono">${deviceTag(r.device_type)}${esc(r.mac)}</td>
                 <td class="rm-mono rm-muted">${esc(r.bssid || "—")}</td>
                 <td>${esc(r.vendor || "—")}</td>
                 <td>${rssiCell(r.rssi)}</td>
@@ -913,7 +923,7 @@ function viewHosts(rows, scan = {}) {
               <tbody>
                 ${sorted.map(r => `
                   <tr>
-                    <td class="rm-mono">${esc(r.ip || "—")}</td>
+                    <td class="rm-mono">${deviceTag(r.device_type)}${esc(r.ip || "—")}</td>
                     <td>${esc(r.hostname || "—")}</td>
                     <td class="rm-mono rm-muted">${esc(r.mac || "—")}</td>
                     <td>${esc(r.vendor || "—")}</td>
