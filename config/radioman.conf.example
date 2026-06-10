@@ -115,6 +115,55 @@ max_jobs = 1
 aircrack_bin = aircrack-ng
 hashcat_bin = hashcat
 
+[storage]
+# Optional at-rest encryption of capture (.pcapng) files. Off by default.
+# Uses the system openssl (AES-256-CBC + PBKDF2) — no extra dependency.
+# The crack queue and downloads decrypt transparently while the key is loaded.
+encrypt = false
+
+# Key mode:
+#   config — passphrase below is used; key always available (auto-crack works
+#            unattended). Lowest friction; the passphrase lives on the device.
+#   pin    — leave passphrase blank; unlock from the dashboard each boot, key is
+#            held in memory only. Strongest at rest; captures before unlock stay
+#            plaintext until you unlock, then they're migrated.
+key_mode = config
+
+# Passphrase for key_mode = config (ignored in pin mode). Use a strong value.
+passphrase =
+
+[ai]
+# Local LLM assistant. Runs fully on-device — no internet traffic.
+# All values OPTIONAL — blank = auto-scale to the detected board via hwinfo.
+#
+# backend = auto | llama | hailo
+#   auto  — use the AI HAT+ 2 (Hailo-10H NPU) if present + its server is up,
+#           else fall back to the CPU (llama.cpp).
+#   llama — force the CPU path (llama.cpp + IBM Granite GGUF).
+#   hailo — force the Hailo-10H NPU path (AI HAT+ 2).
+backend = auto
+
+# ── CPU path (llama.cpp + IBM Granite) ──
+#   llama_cli  — path to the llama-cli binary (default /opt/radioman/llama/llama-cli)
+#   model      — path to the GGUF model (set by install_ai.sh: 350M on Zero 2W, 2B on Pi 5)
+#   threads    — inference threads (default: detected core count, capped)
+#   ctx_size   — context window (default: 2048 on Zero 2W, 4096 on Pi 5)
+#   n_predict  — max tokens generated per reply (default: 256 / 512 on Pi 5)
+#   timeout    — seconds before inference is abandoned (default: 300 / 120 on Pi 5)
+llama_cli =
+model =
+threads =
+ctx_size =
+n_predict =
+timeout =
+
+# ── Hailo-10H path (AI HAT+ 2) — set up by setup/install_hailo.sh ──
+# The HAT runs an on-device LLM via a local Ollama-compatible API (loopback only,
+# no internet). Model must be US-origin: Llama 3.2 1B (Meta). The HAT cannot run
+# the Granite GGUF — that's the CPU path's model.
+hailo_url = http://127.0.0.1:11434
+hailo_model = llama3.2:1b
+
 [database]
 path = /opt/radioman/radioman.db
 

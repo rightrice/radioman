@@ -15,13 +15,26 @@ set -e
 RADIOMAN_DIR="/opt/radioman"
 LLAMA_DIR="$RADIOMAN_DIR/llama"
 MODEL_DIR="$RADIOMAN_DIR/models"
-MODEL_FILE="$MODEL_DIR/granite-4.0-350m-Q4_K_M.gguf"
 LLAMA_BIN="$LLAMA_DIR/llama-cli"
-
-# Model: IBM Granite 4.0 350M Q4_K_M (~230MB) — official IBM GGUF repo, no auth required
-MODEL_REPO="ibm-granite/granite-4.0-350m-GGUF"
-MODEL_FILENAME="granite-4.0-350m-Q4_K_M.gguf"
 HF_BASE="https://huggingface.co"
+
+# ── Board-aware model selection ───────────────────────────────────────────────
+# Both models are IBM Granite so daemon/ai.py's chat template stays valid.
+#   Zero 2W (low RAM)  → Granite 4.0 350M  (~230MB, the only thing that fits)
+#   Pi 5 class (≥4GB)  → Granite 3.3 2B    (~1.5GB, far better; snappy on the A76)
+# Override either by exporting MODEL_REPO + MODEL_FILENAME before running.
+RAM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+SMALL_REPO="ibm-granite/granite-4.0-350m-GGUF";      SMALL_FILE="granite-4.0-350m-Q4_K_M.gguf"
+BIG_REPO="ibm-granite/granite-3.3-2b-instruct-GGUF"; BIG_FILE="granite-3.3-2b-instruct-Q4_K_M.gguf"
+
+if [ -z "${MODEL_REPO:-}" ]; then
+  if [ "${RAM_MB:-0}" -ge 4096 ]; then
+    MODEL_REPO="$BIG_REPO";   MODEL_FILENAME="$BIG_FILE"
+  else
+    MODEL_REPO="$SMALL_REPO"; MODEL_FILENAME="$SMALL_FILE"
+  fi
+fi
+MODEL_FILE="$MODEL_DIR/$MODEL_FILENAME"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -186,10 +199,23 @@ fi
 if [ -f "$MODEL_FILE" ] && [ "$(stat -c%s "$MODEL_FILE" 2>/dev/null || echo 0)" -gt 100000000 ]; then
   info "Granite model already present at $MODEL_FILE"
 else
-  log "Downloading IBM Granite 4.0 350M (Q4_K_M, ~230MB)..."
-  info "This may take a few minutes depending on your connection."
-
   MODEL_URL="${HF_BASE}/${MODEL_REPO}/resolve/main/${MODEL_FILENAME}"
+
+  # Pre-flight the URL. If the chosen (big) model isn't reachable, fall back to
+  # the small one so the install still yields a working assistant.
+  if ! curl -sfI -L --max-time 20 "$MODEL_URL" >/dev/null 2>&1; then
+    warn "Model not reachable: $MODEL_REPO/$MODEL_FILENAME"
+    if [ "$MODEL_REPO" != "$SMALL_REPO" ]; then
+      warn "Falling back to the small model ($SMALL_FILE). To use a different one,"
+      warn "re-run with: sudo MODEL_REPO=<hf/repo> MODEL_FILENAME=<file.gguf> bash setup/install_ai.sh"
+      MODEL_REPO="$SMALL_REPO"; MODEL_FILENAME="$SMALL_FILE"
+      MODEL_FILE="$MODEL_DIR/$MODEL_FILENAME"
+      MODEL_URL="${HF_BASE}/${MODEL_REPO}/resolve/main/${MODEL_FILENAME}"
+    fi
+  fi
+
+  log "Downloading $MODEL_FILENAME ..."
+  info "This may take a few minutes depending on your connection and model size."
 
   if wget -q --show-progress -O "$MODEL_FILE.tmp" "$MODEL_URL" 2>&1; then
     mv "$MODEL_FILE.tmp" "$MODEL_FILE"
@@ -232,21 +258,28 @@ else
   warn "Smoke test exited rc=$SMOKE_RC — verify in the dashboard AI tab."
 fi
 
-# ── Update radioman.conf with AI paths ────────────────────────────────────────
+# ── Update radioman.conf with the actual AI paths ─────────────────────────────
+# The shipped conf already has an [ai] section (blank model = auto). Set the
+# real model + binary path so the daemon uses what we just installed — works
+# whether the section exists (blank) or not.
 CONF="$RADIOMAN_DIR/radioman.conf"
 if [ -f "$CONF" ]; then
-  if ! grep -q '^\[ai\]' "$CONF"; then
-    cat >> "$CONF" <<'EOF'
-
-[ai]
-# Path to llama-cli binary (set by install_ai.sh)
-llama_cli = /opt/radioman/llama/llama-cli
-# Path to GGUF model file
-model = /opt/radioman/models/granite-4.0-350m-Q4_K_M.gguf
-EOF
-    log "Added [ai] section to radioman.conf"
+  if python3 - "$CONF" "$LLAMA_BIN" "$MODEL_FILE" <<'PY'
+import configparser, sys
+conf, llama, model = sys.argv[1], sys.argv[2], sys.argv[3]
+cp = configparser.ConfigParser()
+cp.read(conf)
+if "ai" not in cp:
+    cp.add_section("ai")
+cp.set("ai", "llama_cli", llama)
+cp.set("ai", "model", model)
+with open(conf, "w") as f:
+    cp.write(f)
+PY
+  then
+    log "radioman.conf [ai] set → model=$(basename "$MODEL_FILE")"
   else
-    info "[ai] section already present in radioman.conf"
+    warn "Could not update [ai] in radioman.conf — set 'model = $MODEL_FILE' manually"
   fi
 fi
 

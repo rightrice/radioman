@@ -30,6 +30,7 @@ from ai import AIEngine
 from gps import GPSReader
 from ble import BLEScanner
 from authz import AuthzEngine
+from vault import Vault
 from attack import AttackEngine
 from rogueap import RogueAPEngine
 from api import create_app
@@ -78,6 +79,8 @@ class Radioman:
         gps_cfg     = flat(cfg, "gps")
         ble_cfg     = flat(cfg, "bluetooth")
         offensive_cfg = flat(cfg, "offensive")
+        storage_cfg = flat(cfg, "storage")
+        ai_cfg      = flat(cfg, "ai")
 
         self._scan_target = scan_cfg.get("target", "").strip()
         self._my_bssid    = scan_cfg.get("my_bssid", "").strip().upper()
@@ -112,7 +115,7 @@ class Radioman:
         capture_cfg["caplet"]      = os.path.join(BASE_DIR, "radioman.cap")
 
         self.xplt_sync   = XpltSync(xplt_cfg, self._db_path, conf_path=config_path)
-        self.ai          = AIEngine(db_path=self._db_path)
+        self.ai          = AIEngine(db_path=self._db_path, config=ai_cfg)
         self.personality = PersonalityEngine()
         self.display     = Display(
             model=display_cfg.get("model", "epd2in13_V4"),
@@ -120,7 +123,16 @@ class Radioman:
         )
         self.scanner     = NetworkScanner(iface=self._iface, on_host=self._on_host,
                                           target=self._scan_target)
-        self.crack_queue = CrackQueue(crack_cfg, on_cracked=self._on_cracked)
+        # At-rest capture encryption (optional). The crack queue is handed the
+        # vault so it can decrypt to a temp file transparently before cracking.
+        self.vault = Vault(
+            enabled=storage_cfg.get("encrypt", "false").strip().lower() == "true",
+            mode=storage_cfg.get("key_mode", "config"),
+            passphrase=storage_cfg.get("passphrase", ""),
+            captures_dir=capture_cfg.get("captures_dir", "/opt/radioman/captures"),
+        )
+        self.crack_queue = CrackQueue(crack_cfg, on_cracked=self._on_cracked,
+                                      vault=self.vault)
         self.capture     = CaptureEngine(
             config=capture_cfg,
             on_network=self._on_network,
@@ -208,6 +220,7 @@ class Radioman:
             "attack":     self.attack,
             "rogueap":    self.rogueap,
             "offensive_enabled": self._offensive_enabled,
+            "vault":      self.vault,
         }
 
         self._running = False
@@ -271,13 +284,22 @@ class Radioman:
         if bssid and db.is_ignored(self._db_path, bssid):
             log.info("Skipping capture for ignored BSSID %s", bssid)
             return
-        cap_id = db.insert_capture(self._db_path, filepath, bssid, ssid, cap_type)
-        log.info("Capture #%d: %s [%s] bssid=%s  file=%s",
-                 cap_id, ssid or "(hidden)", cap_type, bssid, filepath)
+        # Encrypt at rest if the vault is enabled and unlocked. The crack queue
+        # gets the (possibly encrypted) stored path and decrypts to a temp file
+        # transparently via the vault.
+        stored, encrypted = filepath, 0
+        if self.vault.enabled and not self.vault.locked:
+            enc = self.vault.encrypt_file(filepath)
+            if enc != filepath:
+                stored, encrypted = enc, 1
+        cap_id = db.insert_capture(self._db_path, stored, bssid, ssid, cap_type, encrypted)
+        log.info("Capture #%d: %s [%s] bssid=%s  file=%s%s",
+                 cap_id, ssid or "(hidden)", cap_type, bssid, stored,
+                 " (encrypted)" if encrypted else "")
         db.log_event(self._db_path, "capture",
                      f"Captured {cap_type}: {ssid or bssid}")
         self.personality.on_capture(ssid)
-        job = CrackJob(capture_id=cap_id, filepath=filepath,
+        job = CrackJob(capture_id=cap_id, filepath=stored,
                        bssid=bssid, ssid=ssid, cap_type=cap_type)
         self.crack_queue.enqueue(job)
 
@@ -328,6 +350,11 @@ class Radioman:
                 if Radioman._cleanup_counter % max(1, 600 // self._pers_period) == 0:
                     db.clean_rssi_history(self._db_path, hours=self._rssi_hours)
                     log.debug("RSSI history cleaned (retention=%dh)", self._rssi_hours)
+                    # Tidy expired scope entries (already denied by is_in_scope).
+                    purged = db.purge_expired_scope(self._db_path)
+                    if purged:
+                        log.info("Purged %d expired scope entr%s", purged,
+                                 "y" if purged == 1 else "ies")
             except Exception as e:
                 log.error("Personality loop error: %s", e)
             time.sleep(self._pers_period)
@@ -370,6 +397,15 @@ class Radioman:
 
         self.gps.start()
         self.ble.start()
+
+        # If the vault is enabled and already holds a key (config mode), encrypt
+        # any plaintext captures left from before encryption was turned on, and
+        # reconcile the DB to disk reality.
+        if self.vault.enabled and not self.vault.locked:
+            migrated = self.vault.encrypt_pending()
+            db.sync_capture_encryption(self._db_path, self.vault._captures_dir)
+            if migrated:
+                log.info("Vault: encrypted %d pre-existing plaintext capture(s)", migrated)
 
         threading.Thread(target=self._display_loop,    daemon=True, name="display").start()
         threading.Thread(target=self._personality_loop, daemon=True, name="personality").start()

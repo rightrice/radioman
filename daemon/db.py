@@ -131,6 +131,17 @@ def init(path: str):
             ts         TEXT
         );
 
+        -- "My lab" — the operator's own networks, saved so they can be added to
+        -- scope in one click for testing without per-MAC tedium. These are a
+        -- convenience list only; nothing is authorized until applied to `scope`.
+        CREATE TABLE IF NOT EXISTS lab_targets (
+            target  TEXT NOT NULL,
+            kind    TEXT NOT NULL,   -- bssid | client | ssid | ip
+            note    TEXT DEFAULT '',
+            added   TEXT,
+            PRIMARY KEY (target, kind)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_clients_bssid ON clients(bssid);
         CREATE INDEX IF NOT EXISTS idx_hosts_last ON hosts(last_seen);
         CREATE INDEX IF NOT EXISTS idx_bluetooth_last ON bluetooth(last_seen);
@@ -150,6 +161,13 @@ def init(path: str):
         "ALTER TABLE networks ADD COLUMN lon REAL",
         "ALTER TABLE networks ADD COLUMN gps_accuracy REAL",
         "ALTER TABLE networks ADD COLUMN gps_rssi INTEGER",
+        # Engagement grouping + auto-expiry on scope entries (friction reducers).
+        # An expired entry is treated as out-of-scope (fail-closed), so this only
+        # ever tightens authorization, never loosens it.
+        "ALTER TABLE scope ADD COLUMN engagement TEXT DEFAULT ''",
+        "ALTER TABLE scope ADD COLUMN expires TEXT DEFAULT ''",
+        # At-rest encryption: 1 if the capture file on disk is the .enc form.
+        "ALTER TABLE captures ADD COLUMN encrypted INTEGER DEFAULT 0",
     ]:
         try:
             conn.execute(col_sql)
@@ -238,18 +256,49 @@ def get_hosts(path: str, limit: int = 500) -> list:
     return [dict(r) for r in rows]
 
 
-def insert_capture(path: str, filename: str, bssid: str, ssid: str, cap_type: str) -> int:
+def insert_capture(path: str, filename: str, bssid: str, ssid: str,
+                   cap_type: str, encrypted: int = 0) -> int:
     now = datetime.utcnow().isoformat()
     conn = get_conn(path)
     cur = conn.execute("""
-        INSERT OR IGNORE INTO captures (filename, bssid, ssid, type, captured_at)
-        VALUES (?, ?, ?, ?, ?)
-    """, (filename, bssid, ssid, cap_type, now))
+        INSERT OR IGNORE INTO captures (filename, bssid, ssid, type, captured_at, encrypted)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (filename, bssid, ssid, cap_type, now, int(encrypted)))
     conn.commit()
     if cur.lastrowid:
         return cur.lastrowid
     row = conn.execute("SELECT id FROM captures WHERE filename=?", (filename,)).fetchone()
     return row["id"] if row else 0
+
+
+def update_capture_file(path: str, capture_id: int, filename: str, encrypted: int):
+    conn = get_conn(path)
+    conn.execute(
+        "UPDATE captures SET filename=?, encrypted=? WHERE id=?",
+        (filename, int(encrypted), capture_id),
+    )
+    conn.commit()
+
+
+def sync_capture_encryption(path: str, captures_dir: str) -> int:
+    """Reconcile capture rows to disk after vault migration: any row whose
+    plaintext file is gone but a <file>.enc exists is updated to point at the
+    encrypted file and flagged encrypted=1. Returns rows updated. Idempotent."""
+    import os as _os
+    conn = get_conn(path)
+    rows = conn.execute("SELECT id, filename, encrypted FROM captures").fetchall()
+    n = 0
+    for r in rows:
+        fn = r["filename"] or ""
+        if r["encrypted"] or not fn:
+            continue
+        if not _os.path.exists(fn) and _os.path.exists(fn + ".enc"):
+            conn.execute("UPDATE captures SET filename=?, encrypted=1 WHERE id=?",
+                         (fn + ".enc", r["id"]))
+            n += 1
+    if n:
+        conn.commit()
+    return n
 
 
 def mark_cracked(path: str, capture_id: int, password: str):
@@ -543,15 +592,22 @@ def _norm_target(target: str, kind: str) -> str:
 
 
 def add_scope(path: str, target: str, kind: str,
-              note: str = "", authref: str = "") -> None:
+              note: str = "", authref: str = "",
+              engagement: str = "", expires: str = "") -> None:
+    """Add/refresh a Rules-of-Engagement allowlist entry.
+    engagement: optional label to group + bulk-clear a batch.
+    expires:    optional ISO-8601 UTC timestamp; once past, the entry is treated
+                as out-of-scope (see is_in_scope) — auto-expiry, fail-closed."""
     now = datetime.utcnow().isoformat()
     conn = get_conn(path)
     conn.execute(
-        """INSERT INTO scope (target, kind, note, authref, added)
-           VALUES (?, ?, ?, ?, ?)
+        """INSERT INTO scope (target, kind, note, authref, added, engagement, expires)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(target, kind) DO UPDATE SET
-               note=excluded.note, authref=excluded.authref""",
-        (_norm_target(target, kind), kind, note.strip(), authref.strip(), now),
+               note=excluded.note, authref=excluded.authref,
+               engagement=excluded.engagement, expires=excluded.expires""",
+        (_norm_target(target, kind), kind, note.strip(), authref.strip(), now,
+         engagement.strip(), expires.strip()),
     )
     conn.commit()
 
@@ -567,20 +623,37 @@ def remove_scope(path: str, target: str, kind: str) -> bool:
 
 
 def get_scope(path: str) -> list:
+    """All scope rows. Includes an `expired` flag so the UI can show stale entries
+    (the authorization path itself ignores expired rows regardless)."""
+    now = datetime.utcnow().isoformat()
     conn = get_conn(path)
     rows = conn.execute(
-        "SELECT target, kind, note, authref, added FROM scope ORDER BY added DESC"
+        "SELECT target, kind, note, authref, added, engagement, expires FROM scope ORDER BY added DESC"
     ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        exp = (d.get("expires") or "").strip()
+        d["expired"] = bool(exp and exp <= now)
+        out.append(d)
+    return out
+
+
+def _scope_live_clause() -> str:
+    """SQL fragment: a row is live if it has no expiry or its expiry is in the future."""
+    return "(expires IS NULL OR expires='' OR expires > ?)"
 
 
 def is_in_scope(path: str, target: str, kind: str) -> bool:
+    """True only if an explicit, non-expired allowlist entry exists. Expired
+    entries are deny-by-default — authorization can only tighten with expiry."""
     if not target:
         return False
+    now = datetime.utcnow().isoformat()
     conn = get_conn(path)
     row = conn.execute(
-        "SELECT 1 FROM scope WHERE target=? AND kind=?",
-        (_norm_target(target, kind), kind),
+        f"SELECT 1 FROM scope WHERE target=? AND kind=? AND {_scope_live_clause()}",
+        (_norm_target(target, kind), kind, now),
     ).fetchone()
     return row is not None
 
@@ -598,9 +671,76 @@ def get_audit(path: str, limit: int = 100) -> list:
 
 
 def get_scope_targets(path: str, kind: str) -> list:
+    """Live (non-expired) scope targets of a kind — used by IP/CIDR matching."""
+    now = datetime.utcnow().isoformat()
     conn = get_conn(path)
-    rows = conn.execute("SELECT target FROM scope WHERE kind=?", (kind,)).fetchall()
+    rows = conn.execute(
+        f"SELECT target FROM scope WHERE kind=? AND {_scope_live_clause()}",
+        (kind, now),
+    ).fetchall()
     return [r["target"] for r in rows]
+
+
+def get_engagements(path: str) -> list:
+    """Distinct engagement labels with target counts (excludes the blank label)."""
+    conn = get_conn(path)
+    rows = conn.execute(
+        """SELECT engagement, COUNT(*) AS cnt
+           FROM scope WHERE engagement != '' AND engagement IS NOT NULL
+           GROUP BY engagement ORDER BY engagement"""
+    ).fetchall()
+    return [{"engagement": r["engagement"], "count": r["cnt"]} for r in rows]
+
+
+def clear_engagement(path: str, engagement: str) -> int:
+    """Remove every scope entry tagged with an engagement (end-of-engagement)."""
+    conn = get_conn(path)
+    cur = conn.execute("DELETE FROM scope WHERE engagement=?", (engagement.strip(),))
+    conn.commit()
+    return cur.rowcount
+
+
+def purge_expired_scope(path: str) -> int:
+    """Delete scope rows whose expiry has passed. They're already denied by
+    is_in_scope; this just keeps the table tidy. Returns rows removed."""
+    now = datetime.utcnow().isoformat()
+    conn = get_conn(path)
+    cur = conn.execute(
+        "DELETE FROM scope WHERE expires IS NOT NULL AND expires != '' AND expires <= ?",
+        (now,),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+# ── "My lab" — saved owned networks for one-click scoping ───────────────────
+def add_lab_target(path: str, target: str, kind: str, note: str = "") -> None:
+    now = datetime.utcnow().isoformat()
+    conn = get_conn(path)
+    conn.execute(
+        """INSERT INTO lab_targets (target, kind, note, added) VALUES (?, ?, ?, ?)
+           ON CONFLICT(target, kind) DO UPDATE SET note=excluded.note""",
+        (_norm_target(target, kind), kind, note.strip(), now),
+    )
+    conn.commit()
+
+
+def remove_lab_target(path: str, target: str, kind: str) -> bool:
+    conn = get_conn(path)
+    cur = conn.execute(
+        "DELETE FROM lab_targets WHERE target=? AND kind=?",
+        (_norm_target(target, kind), kind),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def get_lab_targets(path: str) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT target, kind, note, added FROM lab_targets ORDER BY added DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def ssid_for_bssid(path: str, bssid: str) -> str:

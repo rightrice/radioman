@@ -28,6 +28,21 @@ info() { echo -e "${BLUE}[info]${NC} $1"; }
 
 [ "$EUID" -ne 0 ] && err "Please run as root: sudo bash setup/install_monitor.sh"
 
+# ── Safety gate ───────────────────────────────────────────────────────────────
+# This project's target board has a Synaptics 43436s radio, which nexmon does
+# NOT support — building nexmon here makes brcmfmac fail to bind (probe -110) and
+# leaves NO wlan0 on every boot. Monitor mode requires the external Alfa adapter.
+# Only proceed if you genuinely have a nexmon-supported BCM43430A1.
+if [ "${I_HAVE_NEXMON_CHIP:-}" != "1" ]; then
+  warn "Refusing to build nexmon by default — it breaks wlan0 on the Synaptics 43436s."
+  warn ""
+  warn "  • For monitor mode on this hardware, use a USB adapter: sudo bash setup/install_alfa.sh"
+  warn "  • If wlan0 is already broken by a past nexmon build: sudo bash setup/fix_wlan0.sh"
+  warn "  • If you REALLY have a genuine BCM43430A1 and want nexmon anyway:"
+  warn "        sudo I_HAVE_NEXMON_CHIP=1 bash setup/install_monitor.sh"
+  exit 1
+fi
+
 IFACE="${1:-wlan0}"
 MON_IFACE="mon0"
 NEXMON_SRC="/opt/nexmon-src"

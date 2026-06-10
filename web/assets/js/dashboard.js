@@ -111,7 +111,7 @@ async function fetchViewData() {
     case "networks":  return get("/api/networks");
     case "clients":   return get("/api/clients");
     case "ble":       return get("/api/bluetooth");
-    case "captures":  return get("/api/captures");
+    case "captures":  return Promise.all([get("/api/captures"), get("/api/passwords"), get("/api/vault")]);
     case "graph":     return graphMode === "lan" ? get("/api/hosts")
                            : graphMode === "l3"  ? get("/api/topology")
                            : get("/api/graph");
@@ -121,7 +121,7 @@ async function fetchViewData() {
     case "ignore":    return get("/api/ignore");
     case "stats":     return Promise.all([get("/api/networks"), get("/api/stats")]);
     case "ai":        return get("/api/ai/status");
-    case "active":    return Promise.all([get("/api/offensive/status"), get("/api/scope"), get("/api/audit"), get("/api/networks"), get("/api/rogueap/status"), get("/api/rogueap/loot")]);
+    case "active":    return Promise.all([get("/api/offensive/status"), get("/api/scope"), get("/api/audit"), get("/api/networks"), get("/api/rogueap/status"), get("/api/rogueap/loot"), get("/api/lab"), get("/api/scope/engagements")]);
     case "settings":  return Promise.all([get("/api/settings"), get("/api/wifi/status"), get("/api/networks")]);
     case "overview":  return Promise.all([get("/api/networks"), get("/api/events?limit=3")]);
     default:          return null;
@@ -163,7 +163,13 @@ function renderMain(status, data, xplt = null) {
     case "networks":  main.innerHTML = viewNetworks(data || []); attachIgnoreHandlers(); attachDeleteHandlers(); break;
     case "clients":   main.innerHTML = viewClients(data || []); attachDeleteHandlers(); break;
     case "ble":       main.innerHTML = viewBluetooth(data || []); attachDeleteHandlers(); break;
-    case "captures":  main.innerHTML = viewCaptures(data || []); attachCrackHandlers(); break;
+    case "captures": {
+      const [caps, pw, vault] = Array.isArray(data) ? data : [[], {}, {}];
+      main.innerHTML = viewCaptures(caps || [], pw || {}, vault || {});
+      attachCrackHandlers();
+      attachVaultHandlers();
+      break;
+    }
     case "graph": {
       // Build the canvas once; subsequent polls only feed new data (no flash,
       // selection + layout persist).
@@ -208,8 +214,8 @@ function renderMain(status, data, xplt = null) {
       attachAIHandlers();
       break;
     case "active": {
-      const [off, scope, audit, nets, rogue, loot] = Array.isArray(data) ? data : [{}, [], [], [], {}, {}];
-      main.innerHTML = viewActive(off || {}, scope || [], audit || [], nets || [], rogue || {}, loot || {});
+      const [off, scope, audit, nets, rogue, loot, lab, engagements] = Array.isArray(data) ? data : [{}, [], [], [], {}, {}, [], []];
+      main.innerHTML = viewActive(off || {}, scope || [], audit || [], nets || [], rogue || {}, loot || {}, lab || [], engagements || []);
       attachActiveHandlers();
       break;
     }
@@ -713,12 +719,67 @@ function attachMapHandlers() {
 }
 
 // ── Captures ──────────────────────────────────────────────────────────────────
-function viewCaptures(rows) {
-  if (!rows.length) return empty("🔐", "No handshakes captured yet");
+function passwordIntelPanel(a) {
+  if (!a || !a.total) return "";
+  const ratingColor = { "very weak": "var(--rm-red)", "weak": "var(--rm-red)",
+    "fair": "var(--rm-amber)", "strong": "var(--rm-green)", "very strong": "var(--rm-green)" };
+  const ratings = Object.entries(a.ratings || {})
+    .map(([k, v]) => `<span class="rm-pw-pill" style="color:${ratingColor[k] || "var(--aap-muted)"}">${esc(k)}: ${v}</span>`).join("");
+  const pats = Object.entries(a.patterns || {}).slice(0, 8)
+    .map(([k, v]) => `<span class="rm-pw-pill">${esc(k)} <span class="rm-muted">×${v}</span></span>`).join("") || "<span class='rm-muted'>none</span>";
+  const reuse = (a.reuse || []).length
+    ? a.reuse.map(r => `<div class="rm-muted" style="font-size:0.78rem">${esc(r.masked)} — reused on ${r.count}: ${esc(r.ssids.join(", "))}</div>`).join("")
+    : "<span class='rm-muted'>none</span>";
+  const recs = (a.recommendations || []).map(r => `<li>${esc(r)}</li>`).join("");
+  return `
+    <div class="dash-panel dash-panel-full" style="margin-bottom:1rem">
+      <div class="dash-panel-header"><h3>Password intelligence</h3>
+        <span class="rm-muted">${a.total} cracked · avg ${a.avg_entropy} bits · ${a.weak_pct}% weak</span></div>
+      <div class="rm-pw-body">
+        <div class="rm-pw-row"><span class="rm-pw-label">Strength</span><div>${ratings}</div></div>
+        <div class="rm-pw-row"><span class="rm-pw-label">Patterns</span><div>${pats}</div></div>
+        <div class="rm-pw-row"><span class="rm-pw-label">Factory-default shapes</span><div>${a.defaults}</div></div>
+        <div class="rm-pw-row"><span class="rm-pw-label">Reused keys</span><div>${reuse}</div></div>
+        ${recs ? `<div class="rm-pw-row"><span class="rm-pw-label">Recommendations</span><ul class="rm-pw-recs">${recs}</ul></div>` : ""}
+      </div>
+    </div>`;
+}
+
+function vaultBanner(v) {
+  if (!v || !v.enabled) return "";
+  const fp = v.fingerprint ? `<span class="rm-mono">${esc(v.fingerprint)}</span>` : "—";
+  const counts = `${v.encrypted || 0} encrypted${v.plaintext ? ` · ${v.plaintext} plaintext` : ""}`;
+  if (v.locked) {
+    return `
+      <div class="rm-roe-banner" style="margin-bottom:1rem">
+        <span class="rm-roe-icon">🔒</span>
+        <div style="flex:1">
+          <strong>Capture vault is LOCKED</strong> (mode: ${esc(v.mode)}). Encrypted captures can't be cracked or downloaded until you unlock. ${counts}.
+          <div class="rm-ignore-form" style="padding:0.6rem 0 0">
+            <input class="rm-ignore-input" id="rmVaultPin" type="password" placeholder="Passphrase / PIN" maxlength="128" style="max-width:280px">
+            <button class="rm-btn rm-btn-primary" id="rmVaultUnlock">Unlock</button>
+          </div>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="rm-roe-banner rm-roe-armed" style="margin-bottom:1rem">
+      <span class="rm-roe-icon">🔓</span>
+      <div style="flex:1">
+        <strong>Capture vault unlocked</strong> (mode: ${esc(v.mode)}) — key ${fp} · ${counts}. New captures are encrypted at rest; cracking & downloads decrypt transparently.
+      </div>
+      ${v.mode === "pin" ? `<button class="rm-btn" id="rmVaultLock">Lock</button>` : ""}
+    </div>`;
+}
+
+function viewCaptures(rows, pwAnalysis, vault) {
+  if (!rows.length) return (vaultBanner(vault) || "") + empty("🔐", "No handshakes captured yet");
   return `
     <div class="rm-action-bar">
       <span class="rm-muted">${rows.length} capture${rows.length !== 1 ? "s" : ""}</span>
     </div>
+    ${vaultBanner(vault)}
+    ${passwordIntelPanel(pwAnalysis)}
     <div class="dash-panel dash-panel-full">
       <div class="dash-table-scroll">
         <table class="dash-table">
@@ -731,7 +792,7 @@ function viewCaptures(rows) {
               <tr>
                 <td class="rm-table-ssid">${esc(r.ssid || "—")}</td>
                 <td class="rm-mono rm-table-bssid">${esc(r.bssid || "—")}</td>
-                <td><span class="rm-cap-type">${esc(r.type || "—")}</span></td>
+                <td><span class="rm-cap-type">${esc(r.type || "—")}</span>${r.encrypted ? ` <span class="rm-enc-badge" title="Encrypted at rest">🔒</span>` : ""}</td>
                 <td class="rm-muted">${shortDate(r.captured_at)}</td>
                 <td>${r.cracked
                   ? `<span class="rm-crack-badge-ok">✓ ${esc(r.password || "found")}</span>`
@@ -763,6 +824,29 @@ function attachCrackHandlers() {
         btn.textContent = "Error";
       }
     });
+  });
+}
+
+function attachVaultHandlers() {
+  const unlock = document.getElementById("rmVaultUnlock");
+  if (unlock) unlock.addEventListener("click", async () => {
+    const pin = (document.getElementById("rmVaultPin")?.value || "");
+    if (!pin) { document.getElementById("rmVaultPin")?.focus(); return; }
+    unlock.textContent = "Unlocking…"; unlock.disabled = true;
+    try {
+      const r = await post("/api/vault/unlock", { passphrase: pin });
+      if (r.error) { alert(r.error); unlock.textContent = "Unlock"; unlock.disabled = false; }
+      else poll();
+    } catch (e) { unlock.textContent = "Unlock"; unlock.disabled = false; }
+  });
+  document.getElementById("rmVaultPin")?.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); unlock?.click(); }
+  });
+
+  const lock = document.getElementById("rmVaultLock");
+  if (lock) lock.addEventListener("click", async () => {
+    lock.disabled = true;
+    try { await post("/api/vault/lock", {}); poll(); } catch (e) { lock.disabled = false; }
   });
 }
 
@@ -1347,9 +1431,11 @@ async function del(path) {
 }
 
 // ── Active / offensive testing (authorized engagements only) ──────────────────
-function viewActive(off, scope, audit, nets, rogue, loot) {
+function viewActive(off, scope, audit, nets, rogue, loot, lab, engagements) {
   const enabled  = !!off.enabled;
   const scanning = !!off.scanning;
+  lab = lab || [];
+  engagements = engagements || [];
   const ssidScope  = new Set(scope.filter(s => s.kind === "ssid").map(s => s.target));
   const bssidScope = new Set(scope.filter(s => s.kind === "bssid").map(s => (s.target || "").toUpperCase()));
 
@@ -1363,6 +1449,31 @@ function viewActive(off, scope, audit, nets, rogue, loot) {
           ? `<span class="rm-roe-state rm-roe-on">OFFENSIVE MODE ON</span>`
           : `<span class="rm-roe-state rm-roe-off">OFFENSIVE MODE OFF</span> — set <code>[offensive] enabled=true</code> in <code>radioman.conf</code> and restart to use.`}
       </div>
+    </div>`;
+
+  // Engagement context — set the authorization ref / label / expiry ONCE, then
+  // one-tap authorize any AP in range. Used by every add path (one-tap, manual,
+  // bulk, lab-apply) so authorization is fast without dropping the attestation.
+  const engChips = engagements.length
+    ? engagements.map(e => `<span class="rm-eng-chip">${esc(e.engagement)} <span class="rm-muted">(${e.count})</span>
+        <button class="rm-eng-end" data-engagement="${esc(e.engagement)}" title="End engagement — clears its ${e.count} scope entr${e.count === 1 ? "y" : "ies"}">×</button></span>`).join("")
+    : `<span class="rm-muted">no active engagements</span>`;
+  const contextCard = `
+    <div class="dash-panel dash-panel-full" style="margin-top:1rem">
+      <div class="dash-panel-header"><h3>Engagement context</h3>
+        <span class="rm-muted">applies to one-tap authorize, manual add, bulk &amp; lab</span></div>
+      <div class="rm-ignore-form">
+        <input class="rm-ignore-input" id="rmEngAuth" placeholder="Authorization ref (ticket / client / RoE id)" maxlength="80" style="flex:2;min-width:220px">
+        <input class="rm-ignore-input" id="rmEngName" placeholder="Engagement label (optional)" maxlength="80" style="flex:1;min-width:140px">
+        <select class="rm-purge-select" id="rmEngTtl" title="Auto-expire scope entries added with this context">
+          <option value="0">No expiry</option>
+          <option value="4">Expires 4h</option>
+          <option value="8">Expires 8h</option>
+          <option value="24">Expires 24h</option>
+          <option value="72">Expires 72h</option>
+        </select>
+      </div>
+      <div class="rm-eng-chips">${engChips}</div>
     </div>`;
 
   // Live, in-scope APs (by exact BSSID or SSID membership) → one-tap deauth.
@@ -1385,6 +1496,36 @@ function viewActive(off, scope, audit, nets, rogue, loot) {
               <td><button class="rm-deauth-btn" data-bssid="${esc(n.bssid)}" ${enabled && scanning ? "" : "disabled"}
                     title="${enabled ? (scanning ? "Deauth this AP's clients to force a handshake" : "Start a scan first — monitor mode must be active") : "Enable offensive mode first"}">Deauth</button></td>
             </tr>`).join("") : `<tr><td colspan="6" class="rm-muted">No in-scope APs in range. Add a BSSID or SSID to scope below.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+  // In range but NOT yet authorized → one-tap "Authorize" (uses engagement context).
+  const unscoped = nets
+    .filter(n => n.bssid &&
+      !bssidScope.has((n.bssid || "").toUpperCase()) &&
+      !ssidScope.has(n.ssid))
+    .sort((a, b) => (b.rssi ?? -100) - (a.rssi ?? -100))
+    .slice(0, 30);
+  const discoverCard = `
+    <div class="dash-panel dash-panel-full" style="margin-top:1rem">
+      <div class="dash-panel-header"><h3>In range — not in scope</h3>
+        <span class="rm-muted">${unscoped.length} discovered AP${unscoped.length !== 1 ? "s" : ""}</span></div>
+      <div class="dash-table-scroll">
+        <table class="dash-table">
+          <thead><tr><th>SSID</th><th>BSSID</th><th>CH</th><th>Signal</th><th></th></tr></thead>
+          <tbody>${unscoped.length ? unscoped.map(n => `
+            <tr>
+              <td class="rm-table-ssid">${esc(n.ssid || "—")}</td>
+              <td class="rm-mono">${esc(n.bssid)}</td>
+              <td>${n.channel ?? "—"}</td>
+              <td>${rssiCell(n.rssi)}</td>
+              <td>
+                <button class="rm-authz-btn" data-kind="bssid" data-target="${esc(n.bssid)}" title="Add this AP (BSSID) to scope using the engagement context above">+ BSSID</button>
+                ${n.ssid ? `<button class="rm-authz-btn" data-kind="ssid" data-target="${esc(n.ssid)}" title="Authorize the whole SSID — every AP broadcasting this name becomes in-scope">+ SSID</button>` : ""}
+              </td>
+            </tr>`).join("") : `<tr><td colspan="5" class="rm-muted">No un-scoped APs in range — run a scan to discover.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1449,15 +1590,48 @@ function viewActive(off, scope, audit, nets, rogue, loot) {
       </div>
     </div>` : "";
 
+  // My Lab — saved owned networks, one-click apply to scope.
+  const labRows = lab.length ? lab.map(t => `
+    <tr>
+      <td><span class="rm-scope-kind">${esc(t.kind)}</span></td>
+      <td class="rm-mono">${esc(t.target)}</td>
+      <td class="rm-muted">${esc(t.note || "")}</td>
+      <td><button class="rm-delete-btn rm-lab-del" data-kind="${esc(t.kind)}" data-target="${esc(t.target)}">Remove</button></td>
+    </tr>`).join("") : `<tr><td colspan="4" class="rm-muted">No lab targets saved. Add your own networks here to scope them in one click.</td></tr>`;
+  const labCard = `
+    <div class="dash-panel dash-panel-full" style="margin-top:1rem">
+      <div class="dash-panel-header"><h3>My Lab — owned networks</h3>
+        <button class="rm-btn rm-btn-primary" id="rmLabApply" ${lab.length ? "" : "disabled"}
+          title="Add every saved lab target to scope using the engagement context above">Apply lab to scope</button></div>
+      <div class="rm-ignore-form">
+        <select class="rm-purge-select" id="rmLabKind">
+          <option value="bssid">BSSID (AP)</option>
+          <option value="client">Client MAC</option>
+          <option value="ssid">SSID</option>
+          <option value="ip">IP / CIDR</option>
+        </select>
+        <input class="rm-ignore-input rm-mono" id="rmLabTarget" placeholder="AA:BB:CC:DD:EE:FF" maxlength="64" spellcheck="false">
+        <input class="rm-ignore-input" id="rmLabNote" placeholder="Note (e.g. home router)" maxlength="80">
+        <button class="rm-btn" id="rmLabAdd">Save</button>
+      </div>
+      <div class="dash-table-scroll">
+        <table class="dash-table">
+          <thead><tr><th>Kind</th><th>Target</th><th>Note</th><th></th></tr></thead>
+          <tbody>${labRows}</tbody>
+        </table>
+      </div>
+    </div>`;
+
   // Scope management
   const scopeRows = scope.length ? scope.map(s => `
-    <tr>
+    <tr class="${s.expired ? "rm-scope-expired" : ""}">
       <td><span class="rm-scope-kind">${esc(s.kind)}</span></td>
       <td class="rm-mono">${esc(s.target)}</td>
       <td>${esc(s.authref || "—")}</td>
-      <td class="rm-muted">${esc(s.note || "")}</td>
+      <td>${s.engagement ? esc(s.engagement) : "<span class='rm-muted'>—</span>"}</td>
+      <td class="rm-muted">${s.expired ? "expired" : (s.expires ? "→ " + shortDate(s.expires) : "—")}</td>
       <td><button class="rm-delete-btn rm-scope-del" data-kind="${esc(s.kind)}" data-target="${esc(s.target)}">Remove</button></td>
-    </tr>`).join("") : `<tr><td colspan="5" class="rm-muted">Scope is empty — nothing is authorized.</td></tr>`;
+    </tr>`).join("") : `<tr><td colspan="6" class="rm-muted">Scope is empty — nothing is authorized.</td></tr>`;
   const scopePanel = `
     <div class="dash-panel dash-panel-full" style="margin-top:1rem">
       <div class="dash-panel-header"><h3>Rules of Engagement — Scope</h3>
@@ -1470,17 +1644,19 @@ function viewActive(off, scope, audit, nets, rogue, loot) {
           <option value="ip">IP / CIDR</option>
         </select>
         <input class="rm-ignore-input rm-mono" id="rmScopeTarget" placeholder="AA:BB:CC:DD:EE:FF" maxlength="64" spellcheck="false">
-        <input class="rm-ignore-input" id="rmScopeAuth" placeholder="Authorization ref (ticket / client / RoE id)" maxlength="80">
-        <button class="rm-btn rm-btn-primary" id="rmScopeAdd">Add</button>
+        <button class="rm-btn rm-btn-primary" id="rmScopeAdd" title="Adds using the engagement context above">Add</button>
       </div>
       <div class="rm-ignore-form" style="padding-top:0">
         <textarea class="rm-ignore-input" id="rmScopeBulk" rows="2" style="flex:1;min-width:240px;resize:vertical"
           placeholder="Bulk paste from RoE doc — one per line (MAC→AP, IP/CIDR→ip, else SSID). Optional 'ssid:' / 'bssid:' prefix."></textarea>
         <button class="rm-btn" id="rmScopeBulkAdd">Import</button>
       </div>
+      <div class="rm-muted" style="padding:0 1.25rem 0.6rem;font-size:0.78rem">
+        Authorization ref, engagement label &amp; expiry come from <strong>Engagement context</strong> above.
+      </div>
       <div class="dash-table-scroll">
         <table class="dash-table">
-          <thead><tr><th>Kind</th><th>Target</th><th>Auth ref</th><th>Note</th><th></th></tr></thead>
+          <thead><tr><th>Kind</th><th>Target</th><th>Auth ref</th><th>Engagement</th><th>Expiry</th><th></th></tr></thead>
           <tbody>${scopeRows}</tbody>
         </table>
       </div>
@@ -1498,7 +1674,24 @@ function viewActive(off, scope, audit, nets, rogue, loot) {
       <div class="rm-log-list">${auditRows}</div>
     </div>`;
 
-  return banner + targetsCard + rogueCard + lootCard + scopePanel + auditPanel;
+  return banner + contextCard + targetsCard + discoverCard + rogueCard + lootCard
+       + labCard + scopePanel + auditPanel;
+}
+
+// Read the shared engagement context (authref / label / ttl) used by every
+// scope-add path. Returns null (and flags the field) if no authref is set.
+function engagementContext() {
+  const authEl = document.getElementById("rmEngAuth");
+  const authref = (authEl?.value || "").trim();
+  if (!authref) {
+    if (authEl) { authEl.style.borderColor = "var(--rm-red)"; authEl.focus(); }
+    return null;
+  }
+  return {
+    authref,
+    engagement: (document.getElementById("rmEngName")?.value || "").trim(),
+    ttl_hours: parseFloat(document.getElementById("rmEngTtl")?.value || "0") || 0,
+  };
 }
 
 function attachActiveHandlers() {
@@ -1512,15 +1705,14 @@ function attachActiveHandlers() {
 
   const addBtn = document.getElementById("rmScopeAdd");
   if (addBtn) addBtn.addEventListener("click", async () => {
-    const kind    = kindSel?.value || "bssid";
-    const target  = (targetEl?.value || "").trim();
-    const authEl  = document.getElementById("rmScopeAuth");
-    const authref = (authEl?.value || "").trim();
+    const kind   = kindSel?.value || "bssid";
+    const target = (targetEl?.value || "").trim();
     if (!target) { targetEl?.focus(); return; }
-    if (!authref) { authEl.style.borderColor = "var(--rm-red)"; authEl.focus(); return; }
+    const ctx = engagementContext();
+    if (!ctx) return;
     addBtn.textContent = "Adding…"; addBtn.disabled = true;
     try {
-      const r = await post("/api/scope", { kind, target, authref });
+      const r = await post("/api/scope", { kind, target, ...ctx });
       if (r.error) alert(r.error); else poll();
     } catch (e) { /* ignore */ }
     addBtn.textContent = "Add"; addBtn.disabled = false;
@@ -1529,16 +1721,78 @@ function attachActiveHandlers() {
   const bulkBtn = document.getElementById("rmScopeBulkAdd");
   if (bulkBtn) bulkBtn.addEventListener("click", async () => {
     const text = (document.getElementById("rmScopeBulk")?.value || "").trim();
-    const authref = (document.getElementById("rmScopeAuth")?.value || "").trim();
     if (!text) return;
-    if (!authref) { alert("Enter an Authorization ref (used for the whole batch) before importing."); return; }
+    const ctx = engagementContext();
+    if (!ctx) { alert("Set an Authorization ref in Engagement context above before importing."); return; }
     bulkBtn.textContent = "Importing…"; bulkBtn.disabled = true;
     try {
-      const r = await post("/api/scope/bulk", { text, authref });
+      const r = await post("/api/scope/bulk", { text, ...ctx });
       if (r.error) alert(r.error);
       else { if (r.skipped?.length) alert(`Imported ${r.added}. Skipped (bad MAC): ${r.skipped.join(", ")}`); poll(); }
     } catch (e) { /* ignore */ }
     bulkBtn.textContent = "Import"; bulkBtn.disabled = false;
+  });
+
+  // One-tap authorize from the "in range — not in scope" list.
+  document.querySelectorAll(".rm-authz-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const { kind, target } = btn.dataset;
+      const ctx = engagementContext();
+      if (!ctx) { alert("Set an Authorization ref in Engagement context above first."); return; }
+      btn.textContent = "…"; btn.disabled = true;
+      try {
+        const r = await post("/api/scope", { kind, target, ...ctx });
+        if (r.error) { alert(r.error); btn.textContent = "+ " + kind.toUpperCase(); btn.disabled = false; }
+        else poll();
+      } catch (e) { btn.disabled = false; }
+    });
+  });
+
+  // End an engagement — clears all its scope entries.
+  document.querySelectorAll(".rm-eng-end").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const eng = btn.dataset.engagement;
+      if (!confirm(`End engagement "${eng}"?\n\nThis removes every scope entry tagged with it — those targets will no longer be authorized.`)) return;
+      btn.disabled = true;
+      try { await del(`/api/scope/engagement?engagement=${encodeURIComponent(eng)}`); poll(); }
+      catch (e) { btn.disabled = false; }
+    });
+  });
+
+  // My Lab — add / remove / apply.
+  const labAdd = document.getElementById("rmLabAdd");
+  if (labAdd) labAdd.addEventListener("click", async () => {
+    const kind   = document.getElementById("rmLabKind")?.value || "bssid";
+    const target = (document.getElementById("rmLabTarget")?.value || "").trim();
+    const note   = (document.getElementById("rmLabNote")?.value || "").trim();
+    if (!target) return;
+    labAdd.disabled = true;
+    try {
+      const r = await post("/api/lab", { kind, target, note });
+      if (r.error) alert(r.error); else poll();
+    } catch (e) { /* ignore */ }
+    labAdd.disabled = false;
+  });
+
+  document.querySelectorAll(".rm-lab-del").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const { kind, target } = btn.dataset;
+      btn.disabled = true;
+      try { await del(`/api/lab?kind=${encodeURIComponent(kind)}&target=${encodeURIComponent(target)}`); poll(); }
+      catch (e) { btn.disabled = false; }
+    });
+  });
+
+  const labApply = document.getElementById("rmLabApply");
+  if (labApply) labApply.addEventListener("click", async () => {
+    const ctx = engagementContext() || { authref: "owned-lab", engagement: "lab", ttl_hours: 0 };
+    if (!confirm("Add all saved lab targets to scope?")) return;
+    labApply.textContent = "Applying…"; labApply.disabled = true;
+    try {
+      const r = await post("/api/lab/apply", ctx);
+      if (r.error) alert(r.error); else poll();
+    } catch (e) { /* ignore */ }
+    labApply.textContent = "Apply lab to scope"; labApply.disabled = false;
   });
 
   document.querySelectorAll(".rm-scope-del").forEach(btn => {
@@ -2310,6 +2564,31 @@ function aiHistoryClear() {
 
 let aiHistory = aiHistoryLoad();
 
+function aiHardwareLine(s) {
+  const hw = s.hardware;
+  if (!hw) return "";
+  const ram = hw.ram_mb ? `${(hw.ram_mb / 1024).toFixed(hw.ram_mb >= 4096 ? 0 : 1)} GB` : "?";
+  const board = (hw.board && hw.board !== "unknown") ? esc(hw.board) : "this host";
+  const onHailo = s.backend === "hailo";
+  // Accelerator chip: green when the NPU is the active engine.
+  const accel = `<span class="rm-pw-pill" style="color:${onHailo ? "var(--rm-green)" : "var(--aap-muted)"}">
+      ${onHailo ? "⚡ Hailo-10H NPU" : "CPU (llama.cpp)"}</span>`;
+  const params = onHailo
+    ? `<span class="rm-mono">model ${esc(s.model || "?")} · ${s.timeout}s</span>`
+    : (s.threads ? `<span class="rm-mono">⚙ ${s.threads} threads · ctx ${s.ctx_size} · ${s.n_predict} tok · ${s.timeout}s</span>` : "");
+  // If a Hailo-10H is present but we're NOT using it, hint that it's available.
+  const hailoHint = (!onHailo && hw.hailo && hw.hailo.llm_capable)
+    ? `<span class="rm-pw-pill" title="${esc(hw.hailo.note || "")}" style="color:var(--rm-amber)">AI HAT+ 2 present — set [ai] backend=hailo to use it</span>`
+    : "";
+  return `
+    <div class="rm-muted" style="font-size:0.78rem;display:flex;flex-wrap:wrap;gap:0.4rem 0.9rem;margin:-0.3rem 0 0.2rem">
+      <span>🖥 ${board} · ${hw.cores || "?"} cores · ${ram} RAM</span>
+      ${accel}
+      ${params}
+      ${hailoHint}
+    </div>`;
+}
+
 function viewAI(aiStatus) {
   const ready  = aiStatus.ready;
   const busy   = aiStatus.busy;
@@ -2335,7 +2614,7 @@ function viewAI(aiStatus) {
       <div class="rm-ai-header">
         <div>
           <h2 style="margin:0;font-size:1.1rem;font-weight:700">AI Assistant</h2>
-          <div class="rm-muted" style="font-size:0.8rem">IBM Granite 1B — runs locally on the Pi</div>
+          <div class="rm-muted" style="font-size:0.8rem">IBM Granite — runs locally on the CPU</div>
         </div>
         <div class="rm-ai-status-row">
           <span class="rm-ai-status-dot ${statusClass}"></span>
@@ -2344,6 +2623,7 @@ function viewAI(aiStatus) {
         </div>
       </div>
 
+      ${aiHardwareLine(aiStatus)}
       ${installNote}
 
       <div class="rm-ai-quick-btns">

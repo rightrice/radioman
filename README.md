@@ -22,10 +22,13 @@ Because Wi-Fi attacks affect third parties in radio range, radioman is built so 
 
 | Component | Details |
 |---|---|
-| SBC | Raspberry Pi Zero 2W |
-| Battery | PiSugar 2 |
+| SBC | Raspberry Pi Zero 2W (512MB) **or** Raspberry Pi 5 (4–16GB) — auto-detected |
+| Battery | PiSugar 2 (optional) |
 | Display | Waveshare 2.13" e-ink (250×122) |
-| Radio | Internal BCM43430A1 (CYW43438) — monitor mode via nexmon DKMS |
+| Radio | Internal radio can't do monitor mode on either board — capture/deauth/rogue-AP need a USB adapter (Alfa AWUS036ACH / AWUS036AXML, see `setup/install_alfa.sh`) |
+| AI | Local LLM, on-device (no internet). CPU path = IBM Granite via llama.cpp (auto-scales by board). **AI HAT+ 2 (Hailo-10H)** path = Llama 3.2 1B on the NPU (~10-25× faster) — set up by `setup/install_hailo.sh`. The original AI HAT+ (Hailo-8) is vision-only and not used for the LLM. |
+
+> radioman adapts to the board at install/runtime: the Pi 5 runs a larger, faster AI and skips the Zero 2W's swap + USB-gadget setup.
 
 ## Features
 
@@ -300,6 +303,8 @@ This installs the DKMS package if missing, reloads the driver, and tests that `m
 > **Important:** `wlan0` disconnects from WiFi while bettercap is scanning on `mon0`.
 > Use the USB cable (`10.55.0.1`) as your primary management connection.
 
+**External adapter (for capture / deauth / rogue AP):** run `sudo bash setup/install_alfa.sh` — it auto-detects an Alfa **AWUS036ACH** (Realtek RTL8812AU) or **AWUS036AXML** (MediaTek MT7921AU), or prompts if it can't, and installs the right driver. Pass `ach` or `axml` to force the model.
+
 ---
 
 ### 7. Install AI (optional)
@@ -322,7 +327,9 @@ sudo chmod +x /opt/radioman/llama/llama-cli
 sudo bash setup/install_ai.sh
 ```
 
-Downloads IBM Granite 4.0 350M Q4_K_M (~230MB). Inference takes ~60s per response on the Pi Zero 2W.
+Board-aware: the **Pi Zero 2W** gets IBM Granite 4.0 350M (~230MB, ~60s/response); the **Pi 5** gets Granite 3.3 2B (~1.5GB, a few seconds/response). Override with `sudo MODEL_REPO=<hf/repo> MODEL_FILENAME=<file.gguf> bash setup/install_ai.sh`.
+
+> The assistant runs entirely on-device as a local `llama-cli` subprocess — **no network calls**. (If you swap in a non-Granite model, update the prompt template in `daemon/ai.py`.)
 
 ---
 
@@ -375,8 +382,11 @@ radioman/
 │   └── build_llama_wsl.sh      # Cross-compile llama-cli (WSL2)
 ├── setup/
 │   ├── install.sh              # Full install script
-│   ├── install_monitor.sh      # Install / verify nexmon DKMS monitor mode
-│   ├── install_ai.sh           # AI model + binary installer
+│   ├── install_monitor.sh      # nexmon DKMS (gated; not for the Synaptics 43436s)
+│   ├── fix_wlan0.sh            # Repair: remove broken nexmon driver, restore wlan0
+│   ├── install_alfa.sh         # External adapter driver (AWUS036ACH / AWUS036AXML)
+│   ├── install_ai.sh           # CPU AI: llama-cli + Granite model (board-aware)
+│   ├── install_hailo.sh        # AI HAT+ 2 (Hailo-10H) NPU LLM — Llama 3.2 1B on-device
 │   ├── install_pisugar.sh      # PiSugar 2 battery setup
 │   ├── tune.sh                 # Disable unused Ubuntu services, reduce RAM/IO usage
 │   ├── update.sh               # Update deployed files after git pull
@@ -415,6 +425,10 @@ radioman/
 | GET | `/api/ai/status` | AI engine status |
 | POST | `/api/ai/chat` | Chat with Granite |
 | POST | `/api/ai/analyze` | Analyze networks or passwords |
+| GET | `/api/passwords` | Offline password intelligence (strength, patterns, reuse, defaults) |
+| GET | `/api/vault` | Capture-encryption status (enabled, mode, locked, key fingerprint) |
+| POST | `/api/vault/unlock` | Unlock the capture vault (pin mode) with a passphrase/PIN |
+| POST | `/api/vault/lock` | Clear the in-memory vault key (pin mode) |
 
 ---
 

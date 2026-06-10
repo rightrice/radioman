@@ -23,12 +23,13 @@ class CrackJob:
 
 
 class CrackQueue:
-    def __init__(self, config: dict, on_cracked: Callable):
+    def __init__(self, config: dict, on_cracked: Callable, vault=None):
         self._wordlist   = config.get("wordlist", "/opt/radioman/wordlists/rockyou.txt")
         self._aircrack   = config.get("aircrack_bin", "aircrack-ng")
         self._hashcat    = config.get("hashcat_bin", "hashcat")
         self._max_jobs   = int(config.get("max_jobs", 1))
         self._on_cracked = on_cracked
+        self._vault      = vault   # decrypts encrypted captures to a temp file
         self._q          = queue.Queue()
         self._running    = False
         self._active     = 0
@@ -43,30 +44,45 @@ class CrackQueue:
         log.info("Queued %s crack: %s", job.cap_type, job.ssid or job.bssid)
 
     def _crack(self, job: CrackJob):
-        if not os.path.exists(job.filepath):
-            log.warning("Capture file missing: %s", job.filepath)
-            return
-        if not os.path.exists(self._wordlist):
-            log.warning("Wordlist missing: %s", self._wordlist)
-            return
-
         try:
-            if job.cap_type == "PMKID":
-                cracked = self._crack_hashcat(job)
-            else:
-                cracked = self._crack_aircrack(job)
-                if not cracked:
-                    cracked = self._crack_hashcat(job)
+            if not os.path.exists(self._wordlist):
+                log.warning("Wordlist missing: %s", self._wordlist)
+                return
+            # If the capture is encrypted, decrypt to a temp file for the run.
+            if self._vault and self._vault.is_encrypted(job.filepath):
+                if self._vault.locked:
+                    log.warning("Vault locked — deferring crack of %s (re-enqueues on unlock)",
+                                job.ssid or job.bssid)
+                    self._seen.discard(job.filepath)
+                    return
+                try:
+                    with self._vault.plaintext(job.filepath) as ptxt:
+                        self._run_crack(job, ptxt)
+                except Exception as e:
+                    log.error("decrypt-for-crack failed (%s): %s", job.filepath, e)
+                return
+            if not os.path.exists(job.filepath):
+                log.warning("Capture file missing: %s", job.filepath)
+                return
+            self._run_crack(job, job.filepath)
         finally:
             with self._lock:
                 self._active -= 1
 
-    def _crack_aircrack(self, job: CrackJob) -> bool:
+    def _run_crack(self, job: CrackJob, path: str):
+        """Run the appropriate cracker against a plaintext capture at `path`."""
+        if job.cap_type == "PMKID":
+            self._crack_hashcat(job, path)
+        else:
+            if not self._crack_aircrack(job, path):
+                self._crack_hashcat(job, path)
+
+    def _crack_aircrack(self, job: CrackJob, path: str) -> bool:
         log.info("aircrack-ng: %s", job.ssid or job.bssid)
         cmd = [self._aircrack, "-q", "-w", self._wordlist]
         if job.bssid:
             cmd += ["-b", job.bssid]
-        cmd.append(job.filepath)
+        cmd.append(path)
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
@@ -83,7 +99,7 @@ class CrackQueue:
             log.warning("aircrack-ng not found")
         return False
 
-    def _crack_hashcat(self, job: CrackJob) -> bool:
+    def _crack_hashcat(self, job: CrackJob, path: str) -> bool:
         if not shutil.which("hcxpcapngtool"):
             log.warning("hcxpcapngtool not found — install hcxtools for PMKID cracking")
             return False
@@ -91,12 +107,12 @@ class CrackQueue:
             log.warning("hashcat not found — PMKID cracking unavailable")
             return False
 
-        hash_file = job.filepath + ".hc22000"
-        pot_file  = job.filepath + ".pot"
+        hash_file = path + ".hc22000"
+        pot_file  = path + ".pot"
 
         try:
             conv = subprocess.run(
-                ["hcxpcapngtool", "-o", hash_file, job.filepath],
+                ["hcxpcapngtool", "-o", hash_file, path],
                 capture_output=True, timeout=60,
             )
             if not os.path.exists(hash_file) or os.path.getsize(hash_file) == 0:

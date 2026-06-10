@@ -22,11 +22,15 @@ info() { echo -e "${BLUE}[info]${NC} $1"; }
 
 [ "$EUID" -ne 0 ] && err "Please run as root: sudo bash setup/install.sh"
 
-# ── OS detection ───────────────────────────────────────────────────────────────
+# ── OS / board detection ─────────────────────────────────────────────────────
 OS_ID=$(grep "^ID=" /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "unknown")
 REAL_USER="${SUDO_USER:-ubuntu}"
+BOARD=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "unknown")
+RAM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+case "$BOARD" in *"Raspberry Pi 5"*) IS_PI5=1 ;; *) IS_PI5=0 ;; esac
 
 log "Starting radioman installation (OS: $OS_ID, user: $REAL_USER)..."
+info "Board: $BOARD  |  RAM: ${RAM_MB}MB  |  Pi 5: $([ "$IS_PI5" = 1 ] && echo yes || echo no)"
 echo ""
 
 # ── Hostname ───────────────────────────────────────────────────────────────────
@@ -48,40 +52,44 @@ log "Updating system packages..."
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
 
-# ── Swap (critical for 512MB Pi Zero 2W) ──────────────────────────────────────
-log "Configuring swap..."
-
-if command -v dphys-swapfile &>/dev/null; then
-  # Raspberry Pi OS only
-  DPHYS_CONF="/etc/dphys-swapfile"
-  if [ -f "$DPHYS_CONF" ]; then
-    sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' "$DPHYS_CONF"
-    sed -i 's/^#*CONF_MAXSWAP=.*/CONF_MAXSWAP=2048/' "$DPHYS_CONF"
-    dphys-swapfile swapoff 2>/dev/null || true
-    dphys-swapfile setup
-    dphys-swapfile swapon
-    log "dphys swap set to 2GB"
-  fi
-else
-  if [ ! -f /swapfile ]; then
-    fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-    echo '/swapfile none swap sw 0 0' >> /etc/fstab
-    log "Manual 2GB swapfile created"
+# ── Swap (only needed on low-RAM boards like the 512MB Pi Zero 2W) ─────────────
+# A Pi 5 (4–16GB) doesn't need swap or zram; skip it there to save SD wear.
+if [ "${RAM_MB:-0}" -gt 0 ] && [ "${RAM_MB}" -lt 1536 ]; then
+  log "Low RAM (${RAM_MB}MB) — configuring swap..."
+  if command -v dphys-swapfile &>/dev/null; then
+    # Raspberry Pi OS only
+    DPHYS_CONF="/etc/dphys-swapfile"
+    if [ -f "$DPHYS_CONF" ]; then
+      sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=2048/' "$DPHYS_CONF"
+      sed -i 's/^#*CONF_MAXSWAP=.*/CONF_MAXSWAP=2048/' "$DPHYS_CONF"
+      dphys-swapfile swapoff 2>/dev/null || true
+      dphys-swapfile setup
+      dphys-swapfile swapon
+      log "dphys swap set to 2GB"
+    fi
   else
-    info "Swapfile already exists"
+    if [ ! -f /swapfile ]; then
+      fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      log "Manual 2GB swapfile created"
+    else
+      info "Swapfile already exists"
+    fi
   fi
-fi
 
-# zram — compressed in-memory swap (lz4, minimal CPU overhead on ARM)
-apt-get install -y -qq zram-tools 2>/dev/null || true
-if command -v zramctl &>/dev/null; then
-  cat > /etc/default/zramswap <<'EOF'
+  # zram — compressed in-memory swap (lz4, minimal CPU overhead on ARM)
+  apt-get install -y -qq zram-tools 2>/dev/null || true
+  if command -v zramctl &>/dev/null; then
+    cat > /etc/default/zramswap <<'EOF'
 ALGO=lz4
 PERCENT=50
 EOF
-  systemctl enable zramswap 2>/dev/null || true
-  systemctl restart zramswap 2>/dev/null || true
-  log "zram enabled (lz4, 50% of RAM)"
+    systemctl enable zramswap 2>/dev/null || true
+    systemctl restart zramswap 2>/dev/null || true
+    log "zram enabled (lz4, 50% of RAM)"
+  fi
+else
+  info "RAM ${RAM_MB}MB — swap/zram not needed, skipping"
 fi
 
 # ── Core system dependencies ───────────────────────────────────────────────────
@@ -156,25 +164,22 @@ if command -v bettercap &>/dev/null; then
   systemctl disable --now bettercap 2>/dev/null || true
 fi
 
-# ── Monitor mode (nexmon brcmfmac driver) ──────────────────────────────────────
-log "Setting up monitor mode..."
-SCRIPT_DIR_TMP="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ "$OS_ID" = "kali" ]; then
-  # Kali: pre-built package in apt
-  if dpkg -l brcmfmac-nexmon-dkms 2>/dev/null | grep -q "^ii"; then
-    info "brcmfmac-nexmon-dkms already installed"
-  else
-    apt-get install -y brcmfmac-nexmon-dkms 2>/dev/null && \
-      log "brcmfmac-nexmon-dkms installed" || \
-      warn "brcmfmac-nexmon-dkms not found — run: sudo bash setup/install_monitor.sh"
-  fi
-  # Pin firmware-nexmon — it crashes BCM43430A1 (chip revision mismatch)
-  apt-mark hold firmware-nexmon 2>/dev/null || true
-else
-  # Ubuntu: build nexmon from source via install_monitor.sh
-  log "Ubuntu detected — building nexmon driver from source (this takes ~15 min)..."
-  bash "$SCRIPT_DIR_TMP/install_monitor.sh" || \
-    warn "Monitor mode setup had errors — re-run: sudo bash setup/install_monitor.sh"
+# ── Monitor mode ───────────────────────────────────────────────────────────────
+# DO NOT auto-build/install nexmon here. This board's radio is a Synaptics 43436s
+# (and the Pi 5's is a CYW43455) — neither is nexmon-supported, and the nexmon
+# brcmfmac DKMS module FAILS TO BIND the chip (probe error -110), leaving NO wlan0
+# on every boot. Monitor mode (capture/deauth/rogue-AP) requires the external Alfa
+# adapter regardless — see setup/install_alfa.sh.
+log "Monitor mode: internal radio can't do it on this hardware — skipping nexmon."
+info "  Attach a USB adapter and run: sudo bash setup/install_alfa.sh"
+info "  (Only run setup/install_monitor.sh if you have a genuine nexmon-supported"
+info "   BCM43430A1 — it will break wlan0 on the Synaptics 43436s.)"
+# Safety: keep the firmware-nexmon package from ever being pulled in (it crashes
+# the chip), and make sure no stale nexmon DKMS module is lurking from a prior run.
+apt-mark hold firmware-nexmon 2>/dev/null || true
+if dkms status 2>/dev/null | grep -qi "brcmfmac-nexmon"; then
+  warn "A nexmon brcmfmac DKMS module is registered — it breaks wlan0 on this board."
+  warn "Remove it permanently with: sudo bash setup/fix_wlan0.sh"
 fi
 
 # ── Waveshare e-ink library ────────────────────────────────────────────────────
@@ -222,29 +227,38 @@ else
   fi
   log "SPI and I2C enabled in $CONFIG_FILE"
 
-  # USB gadget ethernet
-  sed -i '/^dtoverlay=dwc2/d' "$CONFIG_FILE"
-  echo "dtoverlay=dwc2" >> "$CONFIG_FILE"
-  log "dtoverlay=dwc2 set in $CONFIG_FILE"
+  # USB gadget ethernet — Zero 2W / Pi 4 management crutch. The Pi 5 has real
+  # Gigabit Ethernet, so gadget mode is skipped there (manage it over the LAN).
+  if [ "$IS_PI5" != 1 ]; then
+    sed -i '/^dtoverlay=dwc2/d' "$CONFIG_FILE"
+    echo "dtoverlay=dwc2" >> "$CONFIG_FILE"
+    log "dtoverlay=dwc2 set in $CONFIG_FILE"
 
-  if [ -f "$CMDLINE_FILE" ]; then
-    # Migrate g_ether → g_ncm if present (g_ncm has better macOS compatibility)
-    sed -i 's/modules-load=dwc2,g_ether/modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
-    if ! grep -q "modules-load=dwc2,g_ncm" "$CMDLINE_FILE"; then
-      if grep -q "rootwait" "$CMDLINE_FILE"; then
-        sed -i 's/rootwait/rootwait modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
-      elif grep -q "console=" "$CMDLINE_FILE"; then
-        sed -i 's/console=/modules-load=dwc2,g_ncm console=/' "$CMDLINE_FILE"
-      else
-        sed -i '1s/$/ modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
+    if [ -f "$CMDLINE_FILE" ]; then
+      # Migrate g_ether → g_ncm if present (g_ncm has better macOS compatibility)
+      sed -i 's/modules-load=dwc2,g_ether/modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
+      if ! grep -q "modules-load=dwc2,g_ncm" "$CMDLINE_FILE"; then
+        if grep -q "rootwait" "$CMDLINE_FILE"; then
+          sed -i 's/rootwait/rootwait modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
+        elif grep -q "console=" "$CMDLINE_FILE"; then
+          sed -i 's/console=/modules-load=dwc2,g_ncm console=/' "$CMDLINE_FILE"
+        else
+          sed -i '1s/$/ modules-load=dwc2,g_ncm/' "$CMDLINE_FILE"
+        fi
       fi
+      grep -q "modules-load=dwc2,g_ncm" "$CMDLINE_FILE" && \
+        log "USB gadget ethernet enabled (modules-load=dwc2,g_ncm)" || \
+        warn "Could not add g_ncm to $CMDLINE_FILE — add it manually"
     fi
-    grep -q "modules-load=dwc2,g_ncm" "$CMDLINE_FILE" && \
-      log "USB gadget ethernet enabled (modules-load=dwc2,g_ncm)" || \
-      warn "Could not add g_ncm to $CMDLINE_FILE — add it manually"
+  else
+    info "Pi 5 detected — skipping USB gadget (use the onboard Ethernet/Wi-Fi to manage)"
   fi
 fi
 
+# USB gadget networking (usb0) — Zero 2W / Pi 4 only; the Pi 5 uses real Ethernet.
+if [ "$IS_PI5" = 1 ]; then
+  info "Pi 5 detected — skipping usb0 gadget networking"
+else
 # Persistent MAC addresses for g_ncm — prevents host OS treating each reboot as new device
 # g_ncm has better macOS compatibility than g_ether on Apple Silicon
 rm -f /etc/modprobe.d/g_ether.conf
@@ -293,6 +307,7 @@ else
   warn "Neither nmcli nor netplan found — configure usb0 manually after reboot"
   warn "  Create /etc/netplan/10-usb-gadget.yaml with address 10.55.0.1/24"
 fi
+fi   # end USB gadget (non-Pi-5)
 
 # ── Radioman directories and source files ──────────────────────────────────────
 log "Setting up radioman directories..."

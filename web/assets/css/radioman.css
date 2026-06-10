@@ -868,6 +868,91 @@ body {
 }
 .rm-roe-cred-toggle input { accent-color: var(--rm-red); }
 
+/* ── Friction reducers: one-tap authorize, engagements, expiry ─────────────── */
+
+/* One-tap "Authorize" buttons in the in-range list */
+.rm-authz-btn {
+  padding: 0.2rem 0.6rem;
+  margin-right: 0.3rem;
+  border-radius: 4px;
+  border: 1px solid var(--rm-teal);
+  background: transparent;
+  color: var(--rm-teal);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 140ms, color 140ms;
+  white-space: nowrap;
+}
+.rm-authz-btn:hover:not(:disabled) { background: var(--rm-teal); color: #fff; }
+.rm-authz-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Engagement chips */
+.rm-eng-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0 1.25rem 1rem;
+}
+.rm-eng-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.18rem 0.3rem 0.18rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  background: var(--rm-teal-soft, rgba(217,98,42,0.12));
+  color: var(--rm-teal);
+  border: 1px solid rgba(217,98,42,0.25);
+}
+.rm-eng-end {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(224,88,88,0.18);
+  color: var(--rm-red);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.rm-eng-end:hover { background: var(--rm-red); color: #fff; }
+
+/* Expired scope rows — dim + strike so it's clear they no longer authorize */
+.rm-scope-expired td { opacity: 0.5; text-decoration: line-through; }
+.rm-scope-expired td:last-child { text-decoration: none; }
+
+/* ── Password intelligence panel ───────────────────────────────────────────── */
+.rm-pw-body { padding: 0.9rem 1.25rem 1.1rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.rm-pw-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 0.75rem;
+  align-items: start;
+  font-size: 0.84rem;
+}
+.rm-pw-label { color: var(--aap-muted); font-weight: 600; }
+.rm-pw-pill {
+  display: inline-block;
+  margin: 0 0.3rem 0.3rem 0;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-family: var(--rm-mono);
+  font-size: 0.72rem;
+  background: var(--aap-accent-soft);
+}
+.rm-pw-recs { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.rm-pw-recs li { font-size: 0.82rem; line-height: 1.4; }
+@media (max-width: 600px) { .rm-pw-row { grid-template-columns: 1fr; gap: 0.2rem; } }
+
+/* Encrypted-capture badge */
+.rm-enc-badge { font-size: 0.78rem; opacity: 0.85; }
+
 /* ── XPLT sync panel ────────────────────────────────────────── */
 .rm-xplt-panel { margin-top: 1rem; }
 

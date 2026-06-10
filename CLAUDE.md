@@ -40,6 +40,28 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 
 ---
 
+## Multi-board support — Pi Zero 2W **and** Pi 5 (16GB, AI HAT+)
+
+The project now adapts to the host board. `daemon/hwinfo.py` detects board model (`/proc/device-tree/model`), core count, RAM, and AI HAT+/Hailo presence, and returns `recommended_ai()` params.
+
+**AI auto-scales** ([ai.py](daemon/ai.py)): threads = core count (capped), and ctx/n_predict/timeout scale with RAM — Zero 2W class: ctx 2048 / 256 tok / 300s; **Pi 5 class (≥4GB, ≥4 cores): ctx 4096 / 512 tok / 120s**. Everything is overridable via a new `[ai]` config section (`llama_cli`, `model`, `threads`, `ctx_size`, `n_predict`, `timeout`) — all blank by default = auto. `/api/ai/status` now includes a `hardware` block; the dashboard AI tab shows board/cores/RAM + params.
+
+**`setup/install_ai.sh` is board-aware** (user chose the "~3B balanced" tier): Zero 2W (<4GB) → **Granite 4.0 350M** (~230MB); Pi 5 (≥4GB) → **Granite 3.3 2B Instruct** (~1.5GB). Both are IBM Granite so `ai.py`'s chat template (`<|user|>`/`<|assistant|>`) stays valid — **if you swap to a non-Granite model (e.g. Llama), update `_build_prompt` in ai.py to match its template.** Override with `sudo MODEL_REPO=<hf/repo> MODEL_FILENAME=<file.gguf> bash setup/install_ai.sh`; a HEAD-check falls back to the small model if the chosen one is unreachable. The script writes the real `model =` path into the conf's `[ai]` section via configparser. **Everything stays 100% on-device — the LLM is a local `llama-cli` subprocess, zero network calls (user requirement).**
+
+**Two AI HAT generations — know which one:**
+- **AI HAT+ (Hailo-8/8L)** — vision/CNN NPU. Cannot run LLMs (no llama.cpp backend, wrong architecture). Not used by radioman's assistant.
+- **AI HAT+ 2 (Hailo-10H, released 2026-01-15)** — 40 TOPS INT4, **8GB on-board RAM**, purpose-built for GenAI and **runs LLMs on-device**. radioman **uses it for the assistant** when available. (Earlier notes here said "the HAT can't run the LLM" — that was true for the Hailo-8, wrong for the AI HAT+ 2; corrected.)
+
+**Hailo-10H integration ([ai.py](daemon/ai.py)):** the HAT runs an LLM via **hailo-ollama**, a local **Ollama-compatible HTTP server** (loopback `127.0.0.1` — no internet at runtime). `[ai] backend = auto|llama|hailo`: **auto** uses the HAT if present + the server answers, else the CPU. The Hailo path POSTs structured messages to `/api/chat` (server applies the model's chat template, so no Granite-template building). ~30–50 tok/s vs ~2–5 on CPU. `setup/install_hailo.sh` sets it up (PCIe Gen3, `hailo-all`, hailo-ollama, model pull, sets `[ai] backend=hailo`).
+
+**US-origin models only ([[feedback-us-software]]):** Hailo supports Llama 3.2 1B (Meta), Qwen 2.5 (Alibaba), DeepSeek R1 (China) — the user requires **US-company** software, so the HAT runs **Llama 3.2 1B (Meta)** and the CPU path runs **IBM Granite**. The HAT can't run our Granite GGUF (only Hailo-compiled models), so Granite stays the CPU model. Do not propose Qwen/DeepSeek.
+
+**Runtime is 100% on-device** (user requirement). The only network use is the one-time install download (Hailo packages + ~2GB model); after that it's airgap-clean.
+
+**`setup/install.sh` is board-aware:** swap + zram are created **only on low-RAM boards** (<1536MB) — skipped on the Pi 5; the USB-gadget (`usb0`/dwc2/g_ncm) management crutch is **skipped on the Pi 5** (it has real Gigabit Ethernet — manage over the LAN). The Pi 5's internal radio (CYW43455) **also can't do monitor mode**, so capture/deauth/rogue-AP still need the Alfa (`install_alfa.sh`) — unchanged. The official active cooler is firmware-managed; no `arm_freq` cap needed (that was a Zero 2W mitigation).
+
+---
+
 ## ⏩ Session handoff — continuing on the laptop (2026-06-10)
 
 **All of this session's work is in the working tree and UNCOMMITTED.** The user handles all git commits ([[feedback_git]]) — review and commit on the laptop. Nothing here has been verified on the Pi yet; it's code-complete + locally tested (`py_compile`, `node --check`, and per-feature Python unit tests on the dev machine).
@@ -52,14 +74,14 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 
 **New files added this session:** `daemon/gps.py`, `daemon/ble.py`, `daemon/authz.py`, `daemon/attack.py`, `daemon/rogueap.py`. (`daemon/fingerprint.py` already existed from Phase 2.)
 
-**Next up:** Phase 5 (Password intelligence) — see its starting-point block. Optional follow-up: wire rogue-AP/deauth-forced handshakes into the existing crack queue.
+**Next up:** All 6 roadmap phases are code-complete — needs end-to-end **Pi verification** (esp. the parts needing a USB adapter: capture/deauth/rogue-AP). Optional follow-up: wire rogue-AP/deauth-forced handshakes into the existing crack queue; e-ink vault-fingerprint indicator (deferred — see Phase 6 note).
 
 **To run the dashboard on the laptop** (no Pi hardware needed — everything degrades gracefully): `cd daemon && python3 radioman.py ../config/radioman.conf.example` then open `http://127.0.0.1:8080`. GPS/BT/display/PiSugar all report "unavailable" cleanly; the Active tab shows OFFENSIVE MODE OFF unless you set `[offensive] enabled=true` in a local conf copy.
 
 ## Current Pi status (as of 2026-06-10)
 
 - Ubuntu Server 24.04 LTS arm64 flashed and booted; headless (`multi-user.target`); 2GB `/swapfile` + zram; repo cloned, `setup/install.sh` run; bettercap + aircrack-ng installed.
-- **WiFi was lost, then fixed this session.** The Ubuntu path's nexmon build had registered `brcmfmac-nexmon/1.0.0` DKMS, which failed to bind the chip (`brcmfmac: probe ... failed with error -110`) and left **no `wlan0`**. Fix that worked: `sudo dkms remove brcmfmac-nexmon/1.0.0 --all && sudo depmod -a && sudo modprobe -r brcmfmac && sudo modprobe brcmfmac` → `wlan0` returned on the **stock** driver; reconnect with `wpa_supplicant`/netplan (this box has no `nmcli`).
+- **Recurring wlan0 loss on every power cycle — FIXED PERMANENTLY (this session).** The nexmon `brcmfmac` DKMS module kept coming back each boot (DKMS module in the tree + `install.sh` rebuilding it), failing to bind the Synaptics 43436s (`probe ... error -110`) → no `wlan0`. **Two fixes:** (1) new **`setup/fix_wlan0.sh`** removes the nexmon DKMS module + source + any patched `brcmfmac.ko`, restores the stock driver, rebuilds `depmod` + initramfs, reloads, and verifies — run it once on the Pi, then reboot to confirm. (2) **`install.sh` no longer builds nexmon** (it was the source of recurrence) — it now skips it with guidance to use the Alfa. `install_monitor.sh` is gated behind `I_HAVE_NEXMON_CHIP=1` so a manual run can't silently re-break wlan0. Reconnect after fix with `netplan apply`/`wpa_supplicant` (this box has no `nmcli`).
 - **Monitor mode on the internal radio is confirmed IMPOSSIBLE** — the chip is a Synaptics 43436s, not nexmon-supported ([[project_pi-zero-2w-wifi-chip]]). nexmon DKMS is removed and should stay removed. **All capture/deauth/rogue-AP features therefore require a USB WiFi adapter** (Monitor mode plan, Stage 3). The internal radio still does managed-mode scanning fine (`wifiscan.py`, always-on).
 - **Thermal throttling is an open hardware issue.** Idle was 83.8°C with `throttled=0x60006` (arm-freq-capped + currently-throttled) — the SoC has no heatsink. Fixes: add a heatsink (primary), and optionally cap `arm_freq=800` in `/boot/firmware/config.txt` + disable `udisks2`/`serial-getty@ttyS0`. Flask is still the dev server (werkzeug) — fine, not the heat source.
 - **AI: Phase 1 fix in repo, not yet verified on the Pi** — see "Verifying Phase 1".
@@ -115,14 +137,14 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 
 ## Feature roadmap (in progress — building one phase at a time)
 
-Six features planned (the user's list double-counted GPS), built in order with a check-in before each phase. User chose **"go in order, one at a time."** Status: **Phases 1–4 done (code complete, need Pi verification). Phase 5 is next.**
+Six features planned (the user's list double-counted GPS), built in order with a check-in before each phase. User chose **"go in order, one at a time."** Status: **All 6 phases done (code complete, need Pi verification).**
 
 1. ✅ **AI reliability** — DONE in code (see `daemon/ai.py` + `dashboard.js` notes above). Live-data grounding was *already implemented* in `_live_context()`; the blocker was inference failing silently. Still needs verifying on the Pi — see "Verifying Phase 1" below.
 2. ✅ **OUI + device fingerprinting** — DONE in code. New `daemon/fingerprint.py` `device_type_for(mac, vendor, ssid, is_ap)` classifies a coarse device type (router/phone/computer/iot/tv/printer/camera/voip/wearable/gaming/sbc/unknown) from the resolved vendor string + SSID hints + randomized-MAC detection. **Decision:** did NOT bundle a 3MB OUI file — vendor lookup already works via nmap's `nmap-mac-prefixes` (a dependency) in `scanner.py` `_load_oui`, so `fingerprint.py` classifies that vendor string instead. Wired into `radioman.py` `_on_network`/`_on_client`/`_on_host`; `device_type` column added to `networks`/`clients`/`hosts` (idempotent `ALTER TABLE`); `dashboard.js` shows a `deviceTag()` icon in the Networks/Clients/LAN-Hosts tables.
 3. ✅ **GPS + Wardrive mode** — DONE in code. New `daemon/gps.py` `GPSReader(mode, device, baud)` with two backends: **gpsd** (python3-gps module, else a raw JSON socket to 127.0.0.1:2947) and **serial** (raw NMEA `$GxGGA`/`$GxRMC` via pyserial). Thread-safe `current_fix()` → `{fix, lat, lon, alt, accuracy, speed, ts}`; degrades to `fix:0` if no gpsd/pyserial/device. DB: `lat`/`lon`/`gps_accuracy`/`gps_rssi` columns on `networks` + a `wardrive_track` table (idempotent `ALTER TABLE`). **Decision:** each AP is stamped at its **strongest-RSSI** position — `db.stamp_network_gps()` only overwrites when `rssi >= gps_rssi` (a separate column from the live `rssi`, so the "best" reference survives later weaker sightings). Wired into `radioman.py` `_on_network` (stamp) + a `_gps_loop` breadcrumb thread (records a `wardrive_track` point every `track_interval`s when moved >~1m). `[gps]` config section added. API: `GET /api/wardrive` (`{networks, track, fix, enabled}`) + `DELETE /api/wardrive/track`. Frontend: new **Map** nav tab → `viewMap()`/`drawMap()` using **Leaflet** (loaded from unpkg CDN in `index.html`, OSM tiles) — APs as circle-markers coloured by security, the track as a polyline, current position in cyan; falls back to a friendly message if `L` is undefined (offline). Works off the always-on managed-mode `wifiscan.py` — **does not need monitor mode**. Note: Leaflet/tiles load in the *viewer's browser* (same CDN assumption as the Google-Fonts `<link>`), not on the Pi. XPLT sync is unaffected (`_network_row()` whitelists columns, so lat/lon aren't pushed).
 4. ✅ **Bluetooth scanning** — DONE in code. New `daemon/ble.py` `BLEScanner` streams sightings from BlueZ **`bluetoothctl`** in interactive mode (`power on` + `scan on`, parse `[NEW]`/`[CHG]` Device lines → MAC/name/RSSI). **Decision:** chose bluetoothctl over bettercap `ble.recon` because bettercap only runs during a Wi-Fi capture session and is bound to `mon0`, whereas the BT controller (`hci0`) is independent — so this gives always-on discovery on the otherwise-idle radio. Pure, tested parser `parse_btctl_line()`; per-device emit debounce (`EMIT_INTERVAL=15s`) so RSSI churn doesn't hammer the DB; degrades cleanly if `bluetoothctl`/controller absent. Classification via new `fingerprint.ble_type_for(mac, vendor, name)` + `_BLE_NAME_RULES` (adds an **`audio`** type 🎧 for earbuds/headsets; names do most of the work since BLE addresses are often randomized with no OUI). DB: new `bluetooth` table (mac PK, name, vendor, rssi, device_type, first/last_seen) + `upsert_bluetooth`/`get_bluetooth`/`delete_bluetooth`/`purge_stale_bluetooth`; a `bluetooth` count was added to `get_stats`. Wired into `radioman.py` (`_on_ble`, init/start/stop, `state["ble"]`, `vendor_lookup=scanner._vendor_for`). `[bluetooth] mode = auto|bluetoothctl|off`. API: `GET /api/bluetooth` + `DELETE /api/bluetooth/<mac>` + `POST /api/bluetooth/purge`. Frontend: new **Bluetooth** nav tab → `viewBluetooth()` (same row-Delete + 1/3/7/15-day Purge UI as Networks, refactored into a shared `wirePurge()` helper) + a Bluetooth KPI on the Overview.
-5. **Password intelligence** — new `passwords.py`: strength scoring, pattern detection (keyboard walks, year suffixes, vendor defaults), cross-network reuse detection. Feeds the AI analyze tab.
-6. **Optional encrypted capture storage** — encrypt `.pcapng` at rest in `capture.py`, PIN-derived key shown on e-ink. Last because the crack queue needs plaintext, so it must interoperate with `cracker.py`.
+5. ✅ **Password intelligence** — DONE in code. New `daemon/passwords.py` (pure, no hardware): `score()` (length/charset/entropy + rating, with a small embedded common-password list that caps guessable keys at "weak"), `detect_patterns()` (keyboard walks, year/date suffixes, word+digits, all-lower, repeated chars, phone-like, common-word, contains-SSID), `default_shape()` (ISP/router factory shapes — hex requires a hex *letter* so pure-digit PINs don't false-positive), `find_reuse()` (same key across BSSIDs/SSIDs), `analyze()` (aggregate + deterministic recommendations), `summarize()` (literal-password-free block for AI grounding). Wired: `ai.py` `analyze_passwords(items)` now grounds on `passwords.summarize()` instead of raw keys; `api.py` passes full capture dicts + new `GET /api/passwords`; dashboard **Captures** tab shows a `passwordIntelPanel()` (works without the LLM). **All passwords masked** in API/UI output (verified no literal leak). Unit-tested + Flask-test-client tested.
+6. ✅ **Optional encrypted capture storage** — DONE in code. New `daemon/vault.py` encrypts `.pcapng` at rest via the system `openssl enc -aes-256-cbc -pbkdf2` (no new Python dep). Two config-selectable key modes (`[storage] key_mode`): **config** (passphrase in conf → key always available, auto-crack unattended) and **pin** (no passphrase on disk → unlock from the dashboard each boot, key in memory only). `_on_capture` encrypts on arrival; the crack queue and the download endpoint get a transparent plaintext view via `vault.plaintext()` (decrypt-to-temp, wiped after). Unlock migrates pre-unlock plaintext + reconciles the DB + re-queues uncracked captures. Locked encrypted download → 423. Fingerprint shown in the dashboard vault banner + daemon log. **Deferred:** e-ink fingerprint glyph (fixed 250×122 layout, couldn't verify render — dashboard banner covers the need).
 
 ### Architecture notes (how to add a feature)
 - Daemon has grown beyond the README: also `wifiscan.py` (managed-mode AP scanner, no monitor mode needed), `topology.py` (L3/VLAN via traceroute + SNMP), `netcfg.py` (WiFi join from dashboard).
@@ -170,15 +192,21 @@ After `git pull && sudo bash setup/update.sh && sudo systemctl restart radioman`
 - Runs continuously and independently of Wi-Fi capture (separate `hci0` controller) — **no monitor mode needed**. If the combo chip shows coexistence interference while bettercap holds `mon0`, consider pausing BLE during capture (add a `should_pause=lambda: self.capture.scanning` like `wifiscan.py`); not done yet because they're nominally independent.
 - `mode = off` in `[bluetooth]` disables it entirely.
 
-### Phase 5 starting point (Password intelligence)
-- New `daemon/passwords.py` — pure, no hardware. Operates on already-cracked passwords (`captures.password` where `cracked=1`) and SSIDs.
-  - **Strength scoring**: length, charset classes, entropy estimate.
-  - **Pattern detection**: keyboard walks (`qwerty`, `1q2w3e`), year/date suffixes, `name+digits`, all-lowercase+digits, vendor-default shapes.
-  - **Default-password heuristics**: flag SSIDs whose cracked password matches a known ISP/router default pattern (e.g. 8–10 uppercase-hex, `<word><4-6 digits>`).
-  - **Reuse detection**: same password across multiple BSSIDs/SSIDs.
-- DB: either a `password_analysis` view computed on demand, or add `pw_score`/`pw_flags` columns to `captures` (idempotent `ALTER TABLE`) populated in `_on_cracked`. On-demand analysis is simpler and avoids migration churn.
-- Surface in the **AI analyze** tab (`ai.py` already has an `analyze` path with `type=="passwords"` stubbed in `api.py` `/api/ai/analyze`) — feed `passwords.summarize(...)` into the prompt, and/or a small dashboard panel.
-- No new hardware; this is all post-processing of crack results, so it's safe to build and test fully offline.
+### Phase 6 (Encrypted capture storage) — DONE, how it's wired
+- `daemon/vault.py` — `Vault(enabled, mode, passphrase, captures_dir)`. Crypto = system `openssl enc -aes-256-cbc -pbkdf2 -salt`, passphrase piped on stdin (never argv). CBC = confidentiality at rest (threat model: lost/seized device), not authentication.
+- Key modes (`[storage] key_mode`): **config** (passphrase from conf, key always loaded) / **pin** (no passphrase on disk; `POST /api/vault/unlock` sets an in-memory key; `lock` clears it).
+- Flow: bettercap writes plaintext → `capture.py _poll` detects → `radioman._on_capture` calls `vault.encrypt_file()` (→ `<name>.enc`, plaintext shredded) and inserts the row with `encrypted=1`. The crack queue (handed the vault) and the download endpoint use `vault.plaintext(path)` (context manager: decrypt to a temp file, shred on exit). Locked + encrypted download → HTTP 423.
+- Unlock reconciles: `vault.encrypt_pending()` migrates pre-unlock plaintext, `db.sync_capture_encryption()` fixes rows to disk reality, then uncracked captures are re-queued. Config mode does the same on startup in `Radioman.start()`.
+- DB: `captures.encrypted` column (idempotent ALTER) + `update_capture_file`/`sync_capture_encryption` helpers. `insert_capture()` gained an `encrypted` arg.
+- API: `GET /api/vault`, `POST /api/vault/{unlock,lock}`. Frontend: vault banner + unlock/lock + 🔒 badge on encrypted captures (in the Captures tab).
+- **Deferred:** e-ink fingerprint glyph — the e-ink frame is a fixed 250×122 layout I couldn't render-test, so the fingerprint is shown in the dashboard banner + logged at unlock instead.
+- Verified: openssl round-trip, vault unit tests (config/pin/disabled/locked), and a Flask-test-client end-to-end (encrypt-at-rest, decrypt-to-temp for crack, in-memory decrypt download, pin lock→unlock→migrate→reconcile→requeue, locked download 423).
+
+### Phase 5 (Password intelligence) — DONE, how it's wired
+- `daemon/passwords.py` is pure/offline. Entry points: `analyze(items)` → structured dict for `/api/passwords` + the dashboard panel; `summarize(items)` → literal-password-free text for AI grounding; plus `score`/`detect_patterns`/`default_shape`/`find_reuse`/`is_common`/`mask` as building blocks.
+- `items` are cracked capture dicts (`{ssid, bssid, password}`) — i.e. `[c for c in db.get_captures() if c.get("password")]`.
+- On-demand analysis (no DB migration) — chose this over `pw_score` columns to avoid churn.
+- All output masks the literal key (`mask()` = first 2 chars + stars), verified no leak in the API payload.
 
 ## Active / offensive testing (authorized engagements only)
 
@@ -210,6 +238,20 @@ Built with the extra guardrail, since an allowlist can't bound who associates. `
 - API: `GET /api/rogueap/status`, `POST /api/rogueap/{arm,disarm,start,stop}`, `GET/DELETE /api/rogueap/loot` (all 403 when offensive disabled). Frontend: a rogue-AP control card (in-scope SSID dropdown, channel, creds toggle, Arm→Start/Stop) + a loot table.
 
 **Known limitation (documented for the user):** even in-scope, a cloned-SSID AP is RF-indiscriminate — bystanders in range can associate. The arm+ack is the operator's attestation of authorization; the benign-by-default portal limits blast radius. **What's intentionally NOT built:** broadcast/mass deauth, beacon/karma floods, or any untargeted disruption — those are mass-targeting/DoS and were declined regardless of the README disclaimer.
+
+### Friction reducers (DONE in code — keep the boundary, cut the tedium)
+The user asked to "remove all safeguards" to spin up rogue APs as needed. We **kept the `authz.py` boundary** (it's what separates an authorized evil-twin from harvesting bystanders' creds) and instead removed the *friction* of authorizing fast. None of this touches the chokepoint logic — `is_authorized()` still calls `is_in_scope()`, which is now strictly tighter.
+- **One-tap authorize** — the Active tab has an **"In range — not in scope"** table; each discovered AP has `+ BSSID` / `+ SSID` buttons that add it to scope using the shared **Engagement context** (authref + label + TTL set once at the top). Attestation (authref) is still required.
+- **Engagement profiles** — scope entries carry an `engagement` label; engagement chips show counts with an **End** (×) button that bulk-clears that engagement's scope (`DELETE /api/scope/engagement`). `GET /api/scope/engagements`.
+- **Auto-expiry** — scope entries carry an `expires` (from a TTL dropdown). `db.is_in_scope`/`get_scope_targets` exclude expired rows, so expiry is **fail-closed** (auto-deny) — strictly safer. `radioman.py` purges expired rows on the ~10-min cleanup tick (`db.purge_expired_scope`).
+- **"My Lab"** — a `lab_targets` table of the operator's own networks + an **Apply lab to scope** button (one click adds them all, authref `owned-lab`, engagement `lab`). API: `GET/POST/DELETE /api/lab`, `POST /api/lab/apply`.
+- DB: `scope` gained `engagement`+`expires` (idempotent ALTER); new `lab_targets` table; helpers `get_engagements`/`clear_engagement`/`purge_expired_scope`/`add_lab_target`/`get_lab_targets`/`remove_lab_target`. All unit-tested (db + Flask test-client + authz boundary incl. expiry). `authz.py` unchanged.
+
+### `setup/install_alfa.sh` (new) — external adapter driver (dual-model)
+Required for all active features — the internal Synaptics 43436s can't do AP mode or injection. **Auto-detects** the adapter via `lsusb` (or prompts / takes an explicit `ach`|`axml` arg) and installs the right driver:
+- **AWUS036ACH** → Realtek **RTL8812AU** → out-of-tree aircrack-ng DKMS module (survives kernel updates).
+- **AWUS036AXML** → MediaTek **MT7921AU** → in-kernel `mt7921u` (mainline ≥5.12) + `linux-firmware` blobs (no DKMS).
+Point `[offensive] ap_interface = wlan1` (and the capture interface) at it. Run after `install.sh`: `sudo bash setup/install_alfa.sh [ach|axml]`.
 
 ## Monitor mode plan
 

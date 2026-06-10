@@ -2,10 +2,22 @@ import logging
 import os
 import re
 import threading
+from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 
 log = logging.getLogger("api")
+
+
+def _ttl_to_expires(ttl_hours) -> str:
+    """Convert an hours value to an ISO-8601 UTC expiry, or '' for no expiry."""
+    try:
+        h = float(ttl_hours)
+    except (TypeError, ValueError):
+        return ""
+    if h <= 0:
+        return ""
+    return (datetime.utcnow() + timedelta(hours=h)).isoformat()
 
 _here = os.path.dirname(os.path.abspath(__file__))
 _web_flat = os.path.join(_here, "web")        # deployed flat: /opt/radioman/web
@@ -158,19 +170,27 @@ def create_app(state: dict) -> Flask:
             return jsonify({"error": "MAC target must look like AA:BB:CC:DD:EE:FF"}), 400
         if not authref:
             return jsonify({"error": "authref (authorization reference) is required for scope entries"}), 400
-        _db.add_scope(_db_path(), target, kind, note, authref)
-        _db.log_event(_db_path(), "info", f"Scope + {kind}:{target.upper() if kind in ('bssid','client') else target} (auth: {authref})")
-        return jsonify({"added": True, "target": target, "kind": kind})
+        engagement = (data.get("engagement", "") or "").strip()[:80]
+        expires    = _ttl_to_expires(data.get("ttl_hours"))
+        _db.add_scope(_db_path(), target, kind, note, authref, engagement, expires)
+        _db.log_event(_db_path(), "info",
+                      f"Scope + {kind}:{target.upper() if kind in ('bssid','client') else target} (auth: {authref}"
+                      + (f", engagement: {engagement}" if engagement else "")
+                      + (", expires " + expires if expires else "") + ")")
+        return jsonify({"added": True, "target": target, "kind": kind,
+                        "engagement": engagement, "expires": expires})
 
     @app.route("/api/scope/bulk", methods=["POST"])
     def scope_bulk():
         """Paste a scope list from an RoE doc. One target per line; the kind is
         auto-detected (MAC→bssid, IP or CIDR→ip, anything else→ssid), or forced
         with a `kind:` / `kind ` prefix. A shared authref applies to the batch."""
-        data    = request.json or {}
-        text    = data.get("text", "") or ""
-        authref = (data.get("authref", "") or "").strip()
-        note    = (data.get("note", "") or "").strip()
+        data       = request.json or {}
+        text       = data.get("text", "") or ""
+        authref    = (data.get("authref", "") or "").strip()
+        note       = (data.get("note", "") or "").strip()
+        engagement = (data.get("engagement", "") or "").strip()[:80]
+        expires    = _ttl_to_expires(data.get("ttl_hours"))
         if not authref:
             return jsonify({"error": "authref (authorization reference) is required"}), 400
         added, skipped = 0, []
@@ -192,10 +212,12 @@ def create_app(state: dict) -> Flask:
             if kind in ("bssid", "client") and not _MAC_RE.match(line):
                 skipped.append(line)
                 continue
-            _db.add_scope(_db_path(), line, kind, note, authref)
+            _db.add_scope(_db_path(), line, kind, note, authref, engagement, expires)
             added += 1
-        _db.log_event(_db_path(), "info", f"Scope bulk import: +{added} (auth: {authref})")
-        return jsonify({"added": added, "skipped": skipped})
+        _db.log_event(_db_path(), "info", f"Scope bulk import: +{added} (auth: {authref}"
+                      + (f", engagement: {engagement}" if engagement else "") + ")")
+        return jsonify({"added": added, "skipped": skipped,
+                        "engagement": engagement, "expires": expires})
 
     @app.route("/api/scope", methods=["DELETE"])
     def scope_remove():
@@ -207,6 +229,67 @@ def create_app(state: dict) -> Flask:
         if removed:
             _db.log_event(_db_path(), "info", f"Scope − {kind}:{target}")
         return jsonify({"removed": removed})
+
+    # ── Engagement profiles (group + bulk-clear scope) ──────────────────────
+    @app.route("/api/scope/engagements")
+    def scope_engagements():
+        return jsonify(_db.get_engagements(_db_path()))
+
+    @app.route("/api/scope/engagement", methods=["DELETE"])
+    def scope_engagement_clear():
+        name = (request.args.get("engagement", "") or "").strip()
+        if not name:
+            return jsonify({"error": "engagement query param required"}), 400
+        n = _db.clear_engagement(_db_path(), name)
+        if n:
+            _db.log_event(_db_path(), "info", f"Engagement ended: '{name}' — {n} scope entr{'y' if n == 1 else 'ies'} cleared")
+        return jsonify({"cleared": n, "engagement": name})
+
+    # ── "My lab" — saved owned networks for one-click scoping ────────────────
+    @app.route("/api/lab", methods=["GET"])
+    def lab_list():
+        return jsonify(_db.get_lab_targets(_db_path()))
+
+    @app.route("/api/lab", methods=["POST"])
+    def lab_add():
+        data   = request.json or {}
+        kind   = (data.get("kind", "bssid") or "bssid").strip().lower()
+        target = (data.get("target", "") or "").strip()
+        note   = (data.get("note", "") or "").strip()
+        if kind not in _SCOPE_KINDS:
+            return jsonify({"error": f"kind must be one of {', '.join(_SCOPE_KINDS)}"}), 400
+        if not target:
+            return jsonify({"error": "target required"}), 400
+        if kind in ("bssid", "client") and not _MAC_RE.match(target):
+            return jsonify({"error": "MAC target must look like AA:BB:CC:DD:EE:FF"}), 400
+        _db.add_lab_target(_db_path(), target, kind, note)
+        return jsonify({"added": True, "target": target, "kind": kind})
+
+    @app.route("/api/lab", methods=["DELETE"])
+    def lab_remove():
+        kind   = (request.args.get("kind", "") or "").strip().lower()
+        target = (request.args.get("target", "") or "").strip()
+        if kind not in _SCOPE_KINDS or not target:
+            return jsonify({"error": "kind and target query params required"}), 400
+        return jsonify({"removed": _db.remove_lab_target(_db_path(), target, kind)})
+
+    @app.route("/api/lab/apply", methods=["POST"])
+    def lab_apply():
+        """Add all saved lab targets to scope in one click. These are the
+        operator's own networks; the authorization reference records that."""
+        lab = _db.get_lab_targets(_db_path())
+        if not lab:
+            return jsonify({"error": "No lab targets saved yet"}), 400
+        data       = request.json or {}
+        authref    = (data.get("authref", "") or "").strip() or "owned-lab"
+        engagement = (data.get("engagement", "") or "").strip()[:80] or "lab"
+        expires    = _ttl_to_expires(data.get("ttl_hours"))
+        for t in lab:
+            _db.add_scope(_db_path(), t["target"], t["kind"],
+                          t.get("note", ""), authref, engagement, expires)
+        _db.log_event(_db_path(), "info",
+                      f"Lab applied to scope: +{len(lab)} (auth: {authref}, engagement: {engagement})")
+        return jsonify({"applied": len(lab), "engagement": engagement, "expires": expires})
 
     @app.route("/api/attack/deauth", methods=["POST"])
     def attack_deauth():
@@ -315,6 +398,57 @@ def create_app(state: dict) -> Flask:
     def captures():
         return jsonify(_db.get_captures(_db_path()))
 
+    # ── Password intelligence (offline analysis of cracked keys) ──────────────
+    @app.route("/api/passwords")
+    def passwords_analysis():
+        import passwords as _pw
+        cracked = [c for c in _db.get_captures(_db_path()) if c.get("password")]
+        return jsonify(_pw.analyze(cracked))
+
+    # ── Vault (at-rest capture encryption) ────────────────────────────────────
+    @app.route("/api/vault")
+    def vault_status():
+        vault = state.get("vault")
+        if not vault:
+            return jsonify({"enabled": False})
+        return jsonify(vault.status())
+
+    @app.route("/api/vault/unlock", methods=["POST"])
+    def vault_unlock():
+        vault = state.get("vault")
+        if not vault or not vault.enabled:
+            return jsonify({"error": "vault is disabled"}), 400
+        data = request.json or {}
+        pin  = str(data.get("passphrase", data.get("pin", "")))
+        res  = vault.unlock(pin)
+        if not res.get("ok"):
+            return jsonify(res), 400
+        # Reconcile DB to disk, then re-enqueue any uncracked captures so they
+        # crack now that the key is available.
+        _db.sync_capture_encryption(_db_path(), state.get("captures_dir", "/opt/radioman/captures"))
+        from cracker import CrackJob
+        requeued = 0
+        for c in _db.get_captures(_db_path()):
+            if not c.get("cracked") and c.get("filename"):
+                state["crack_queue"].enqueue(CrackJob(
+                    capture_id=c["id"], filepath=c["filename"],
+                    bssid=c.get("bssid") or "", ssid=c.get("ssid") or "",
+                    cap_type=c.get("type", "EAPOL")))
+                requeued += 1
+        _db.log_event(_db_path(), "info",
+                      f"Vault unlocked (fp {res.get('fingerprint')}) — {res.get('migrated',0)} migrated, {requeued} re-queued")
+        return jsonify({**res, "requeued": requeued})
+
+    @app.route("/api/vault/lock", methods=["POST"])
+    def vault_lock():
+        vault = state.get("vault")
+        if not vault:
+            return jsonify({"error": "vault is disabled"}), 400
+        res = vault.lock()
+        if res.get("ok"):
+            _db.log_event(_db_path(), "info", "Vault locked — key cleared from memory")
+        return jsonify(res)
+
     # ── Capture file download ─────────────────────────────────────────────────
     @app.route("/api/captures/<int:capture_id>/download")
     def capture_download(capture_id: int):
@@ -332,11 +466,35 @@ def create_app(state: dict) -> Flask:
         if not real_path.startswith(captures_dir + os.sep) and real_path != captures_dir:
             log.warning("Download blocked outside captures dir: %s", filepath)
             return jsonify({"error": "access denied"}), 403
-        log.info("Capture download: %s", os.path.basename(real_path))
+
+        vault = state.get("vault")
+        dl_name = os.path.basename(real_path)
+        # Encrypted capture → decrypt in memory and serve the plaintext .pcapng.
+        if vault and vault.is_encrypted(real_path):
+            if vault.locked:
+                return jsonify({"error": "vault is locked — unlock to download captures"}), 423
+            try:
+                with vault.plaintext(real_path) as ptxt:
+                    with open(ptxt, "rb") as fh:
+                        data = fh.read()
+            except Exception as e:
+                log.error("decrypt-for-download failed: %s", e)
+                return jsonify({"error": "decryption failed"}), 500
+            from flask import Response
+            dl_name = dl_name[:-len(".enc")] if dl_name.endswith(".enc") else dl_name
+            log.info("Capture download (decrypted): %s", dl_name)
+            return Response(
+                data,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{dl_name}"',
+                    "Content-Type": "application/vnd.tcpdump.pcap",
+                },
+            )
+        log.info("Capture download: %s", dl_name)
         return send_file(
             real_path,
             as_attachment=True,
-            download_name=os.path.basename(real_path),
+            download_name=dl_name,
             mimetype="application/vnd.tcpdump.pcap",
         )
 
@@ -625,7 +783,7 @@ def create_app(state: dict) -> Flask:
             result = state["ai"].analyze_networks(networks, captures)
         elif kind == "passwords":
             captures = _db.get_captures(_db_path())
-            cracked  = [c["password"] for c in captures if c.get("password")]
+            cracked  = [c for c in captures if c.get("password")]
             log.info("AI analyze: passwords (%d cracked)", len(cracked))
             result = state["ai"].analyze_passwords(cracked)
         else:

@@ -17,22 +17,22 @@ import threading
 import time
 from typing import Optional
 
+import hwinfo
+
 log = logging.getLogger("ai")
 
-LLAMA_CLI  = os.environ.get("LLAMA_CLI",  "/opt/radioman/llama/llama-cli")
-MODEL_PATH = os.environ.get("RADIOMAN_MODEL", "/opt/radioman/models/granite-4.0-350m-Q4_K_M.gguf")
+# Defaults; the binary/model can be overridden by env or the [ai] config section.
+DEFAULT_LLAMA_CLI = os.environ.get("LLAMA_CLI",  "/opt/radioman/llama/llama-cli")
+DEFAULT_MODEL     = os.environ.get("RADIOMAN_MODEL", "/opt/radioman/models/granite-4.0-350m-Q4_K_M.gguf")
 
-N_PREDICT = 256
-CTX_SIZE  = 2048   # system prompt + live context + conversation + output.
-                   # Was 1024 — too tight once live context + an analyze prompt
-                   # were added; the input alone could exceed it and llama-cli
-                   # would error or return nothing. 2048 KV cache is cheap for 350M.
-THREADS   = 4
-BATCH     = 128    # smaller prompt-processing batch = less compute-buffer RAM
-TIMEOUT   = 300    # Pi Zero 2W — slow under memory pressure
+BATCH = 128   # prompt-processing batch (smaller = less compute-buffer RAM)
+# Per-host runtime params (threads / ctx_size / n_predict / timeout) are chosen
+# from hwinfo.recommended_ai() and can be overridden in [ai] — see AIEngine.
 
-# Rough input budget in characters (~3.2 chars/token, leaving room for output).
-MAX_PROMPT_CHARS = (CTX_SIZE - N_PREDICT) * 3
+# AI HAT+ 2 (Hailo-10H) backend: a local Ollama-compatible HTTP API (loopback,
+# no internet). US-origin model only — Llama 3.2 1B (Meta). Both overridable in [ai].
+DEFAULT_HAILO_URL   = os.environ.get("HAILO_URL", "http://127.0.0.1:11434")
+DEFAULT_HAILO_MODEL = os.environ.get("HAILO_MODEL", "llama3.2:1b")
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 # Trimmed to ~200 tokens so the 1024-token window leaves room for live data +
@@ -61,12 +61,12 @@ Never suggest illegal use.\
 """
 
 
-def _binary_ok() -> bool:
-    return os.path.isfile(LLAMA_CLI) and os.access(LLAMA_CLI, os.X_OK)
+def _binary_ok(path: str) -> bool:
+    return os.path.isfile(path) and os.access(path, os.X_OK)
 
 
-def _model_ok() -> bool:
-    return os.path.isfile(MODEL_PATH) and os.path.getsize(MODEL_PATH) > 1_000_000
+def _model_ok(path: str) -> bool:
+    return os.path.isfile(path) and os.path.getsize(path) > 1_000_000
 
 
 def _safe_close(fd):
@@ -164,32 +164,110 @@ def _live_context(db_path: Optional[str]) -> str:
 
 
 class AIEngine:
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, config: Optional[dict] = None):
         self._lock    = threading.Lock()
         self._busy    = False
         self._db_path = db_path
-        ready = _binary_ok() and _model_ok()
-        if ready:
-            sz = os.path.getsize(MODEL_PATH) // (1024 * 1024)
-            log.info("AI ready — model=%s (%dMB)", os.path.basename(MODEL_PATH), sz)
+
+        cfg = config or {}
+        self._hw  = hwinfo.summary()
+        rec       = hwinfo.recommended_ai()
+
+        # Binary + model: [ai] config overrides env/defaults.
+        self._llama = cfg.get("llama_cli") or DEFAULT_LLAMA_CLI
+        self._model = cfg.get("model") or DEFAULT_MODEL
+        # Runtime params: explicit [ai] override → hardware recommendation.
+        def _pick(key):
+            return int(cfg[key]) if str(cfg.get(key, "")).strip() else int(rec[key])
+        self._threads   = _pick("threads")
+        self._ctx       = _pick("ctx_size")
+        self._n_predict = _pick("n_predict")
+        self._timeout   = _pick("timeout")
+        # ~3.2 chars/token input budget, leaving room for the generation.
+        self._max_prompt_chars = (self._ctx - self._n_predict) * 3
+
+        # ── Backend selection ────────────────────────────────────────────────
+        # 'hailo' offloads the LLM to the AI HAT+ 2 (Hailo-10H) via its local
+        # Ollama-compatible HTTP API (loopback only — no internet). 'llama' is
+        # the CPU llama.cpp path. 'auto' uses the HAT if it's present + reachable,
+        # else falls back to the CPU. US-origin models only: Llama 3.2 (Meta) on
+        # the HAT, IBM Granite on the CPU.
+        self._backend_cfg = (cfg.get("backend") or "auto").strip().lower()
+        self._hailo_url   = (cfg.get("hailo_url") or DEFAULT_HAILO_URL).rstrip("/")
+        self._hailo_model = cfg.get("hailo_model") or DEFAULT_HAILO_MODEL
+        self._backend     = self._resolve_backend()
+
+        log.info("AI host: %s | %d cores, %dMB RAM%s",
+                 self._hw["board"], self._hw["cores"], self._hw["ram_mb"],
+                 " | AI HAT+ 2 (Hailo-10H) present" if self._hw["hailo"]["present"] else "")
+
+        if self._backend == "hailo":
+            log.info("AI backend: Hailo-10H NPU — model=%s via %s",
+                     self._hailo_model, self._hailo_url)
         else:
-            if not _binary_ok():
-                log.warning("AI: llama-cli not found at %s — run setup/install_ai.sh", LLAMA_CLI)
-            if not _model_ok():
-                log.warning("AI: model not found at %s — run setup/install_ai.sh", MODEL_PATH)
+            log.info("AI backend: CPU llama.cpp — threads=%d ctx=%d n_predict=%d timeout=%ds",
+                     self._threads, self._ctx, self._n_predict, self._timeout)
+            if _binary_ok(self._llama) and _model_ok(self._model):
+                sz = os.path.getsize(self._model) // (1024 * 1024)
+                log.info("AI ready — model=%s (%dMB)", os.path.basename(self._model), sz)
+            else:
+                if not _binary_ok(self._llama):
+                    log.warning("AI: llama-cli not found at %s — run setup/install_ai.sh", self._llama)
+                if not _model_ok(self._model):
+                    log.warning("AI: model not found at %s — run setup/install_ai.sh", self._model)
+
+    def _hailo_reachable(self) -> bool:
+        """True if the Hailo-Ollama endpoint answers (loopback HTTP, no internet)."""
+        try:
+            import requests
+            requests.get(f"{self._hailo_url}/api/tags", timeout=2).raise_for_status()
+            return True
+        except Exception:
+            return False
+
+    def _resolve_backend(self) -> str:
+        if self._backend_cfg == "hailo":
+            return "hailo"
+        if self._backend_cfg == "llama":
+            return "llama"
+        # auto: prefer the HAT only if the device is present AND its server answers.
+        if self._hw["hailo"]["present"] and self._hailo_reachable():
+            return "hailo"
+        return "llama"
 
     def status(self) -> dict:
-        binary = _binary_ok()
-        model  = _model_ok()
-        sz = os.path.getsize(MODEL_PATH) // (1024 * 1024) if model else 0
+        if self._backend == "hailo":
+            reachable = self._hailo_reachable()
+            return {
+                "ready":       reachable,
+                "busy":        self._busy,
+                "backend":     "hailo",
+                "accelerator": "Hailo-10H NPU (AI HAT+ 2)",
+                "model":       self._hailo_model,
+                "model_mb":    0,
+                "hailo_url":   self._hailo_url,
+                "hailo_up":    reachable,
+                "timeout":     self._timeout,
+                "hardware":    self._hw,
+            }
+        binary = _binary_ok(self._llama)
+        model  = _model_ok(self._model)
+        sz = os.path.getsize(self._model) // (1024 * 1024) if model else 0
         return {
             "ready":       binary and model,
             "busy":        self._busy,
+            "backend":     "llama",
+            "accelerator": "CPU (llama.cpp)",
             "binary":      binary,
-            "model":       os.path.basename(MODEL_PATH) if model else None,
+            "model":       os.path.basename(self._model) if model else None,
             "model_mb":    sz,
-            "binary_path": LLAMA_CLI,
-            "model_path":  MODEL_PATH,
+            "binary_path": self._llama,
+            "model_path":  self._model,
+            "threads":     self._threads,
+            "ctx_size":    self._ctx,
+            "n_predict":   self._n_predict,
+            "timeout":     self._timeout,
+            "hardware":    self._hw,
         }
 
     def _build_prompt(self, messages: list, extra_system: str = "") -> str:
@@ -225,12 +303,12 @@ class AIEngine:
         prompt = assemble(msgs)
         # Drop oldest turns until the prompt fits the input budget (always keep
         # the most recent user message).
-        while len(prompt) > MAX_PROMPT_CHARS and len(msgs) > 1:
+        while len(prompt) > self._max_prompt_chars and len(msgs) > 1:
             msgs.pop(0)
             prompt = assemble(msgs)
-        if len(prompt) > MAX_PROMPT_CHARS:
+        if len(prompt) > self._max_prompt_chars:
             log.warning("AI prompt still %d chars after trimming (budget %d)",
-                        len(prompt), MAX_PROMPT_CHARS)
+                        len(prompt), self._max_prompt_chars)
         return prompt
 
     def _infer(self, prompt: str) -> dict:
@@ -243,12 +321,12 @@ class AIEngine:
         generic "inference failed".
         """
         cmd = [
-            LLAMA_CLI,
-            "--model",          MODEL_PATH,
-            "--threads",        str(THREADS),
-            "--ctx-size",       str(CTX_SIZE),
+            self._llama,
+            "--model",          self._model,
+            "--threads",        str(self._threads),
+            "--ctx-size",       str(self._ctx),
             "--batch-size",     str(BATCH),
-            "--n-predict",      str(N_PREDICT),
+            "--n-predict",      str(self._n_predict),
             "--temp",           "0.7",
             "--top-p",          "0.9",
             "--repeat-penalty", "1.1",
@@ -257,7 +335,7 @@ class AIEngine:
             "--prompt",         prompt,
         ]
         log.debug("llama-cli: ctx=%d batch=%d n_predict=%d threads=%d",
-                  CTX_SIZE, BATCH, N_PREDICT, THREADS)
+                  self._ctx, BATCH, self._n_predict, self._threads)
 
         master_fd, slave_fd = pty.openpty()
         stderr_r, stderr_w = os.pipe()
@@ -271,7 +349,7 @@ class AIEngine:
             )
         except FileNotFoundError:
             for fd in (master_fd, slave_fd, stderr_r, stderr_w): _safe_close(fd)
-            return {"error": f"llama-cli not found at {LLAMA_CLI} — run setup/install_ai.sh"}
+            return {"error": f"llama-cli not found at {self._llama} — run setup/install_ai.sh"}
         except Exception as e:
             for fd in (master_fd, slave_fd, stderr_r, stderr_w): _safe_close(fd)
             return {"error": f"Could not start llama-cli: {e}"}
@@ -280,7 +358,7 @@ class AIEngine:
 
         collected, buf, done = [], "", False
         stderr_buf = ""
-        deadline = time.time() + TIMEOUT
+        deadline = time.time() + self._timeout
         fds = [master_fd, stderr_r]
         try:
             while time.time() < deadline and not done:
@@ -352,9 +430,11 @@ class AIEngine:
         return {"error": diag}
 
     def _run(self, messages: list, extra_system: str = "") -> dict:
+        if self._backend == "hailo":
+            return self._run_hailo(messages, extra_system)
         prompt  = self._build_prompt(messages, extra_system)
         log.debug("AI prompt: %d turns, %d chars (ctx budget: %d tokens)",
-                  len(messages), len(prompt), CTX_SIZE)
+                  len(messages), len(prompt), self._ctx)
         t0      = time.time()
         result  = self._infer(prompt)
         elapsed = round(time.time() - t0, 1)
@@ -366,9 +446,56 @@ class AIEngine:
         log.info("AI: %.1fs, %d chars output", elapsed, len(text))
         return {"response": text, "elapsed": elapsed}
 
+    def _run_hailo(self, messages: list, extra_system: str = "") -> dict:
+        """Run inference on the AI HAT+ 2 (Hailo-10H) via its local Ollama-compatible
+        HTTP API. The server applies the model's chat template, so we send
+        structured messages (system + live context, then the conversation) — no
+        Granite-template building needed. Loopback only; no internet."""
+        import requests
+        sys_msg = SYSTEM + (extra_system or "")
+        payload = {
+            "model":    self._hailo_model,
+            "messages": [{"role": "system", "content": sys_msg}] +
+                        [{"role": m.get("role", "user"), "content": str(m.get("content", ""))}
+                         for m in messages],
+            "stream":   False,
+            "options":  {"num_predict": self._n_predict, "temperature": 0.7},
+        }
+        t0 = time.time()
+        try:
+            r = requests.post(f"{self._hailo_url}/api/chat",
+                              json=payload, timeout=self._timeout)
+            r.raise_for_status()
+            data = r.json()
+        except requests.exceptions.ConnectionError:
+            return {"error": f"Hailo NPU server unreachable at {self._hailo_url} — "
+                             "is hailo-ollama running? (sudo systemctl status hailo-ollama)"}
+        except requests.exceptions.Timeout:
+            return {"error": f"Hailo inference timed out after {self._timeout}s"}
+        except Exception as e:
+            return {"error": f"Hailo inference error: {e}"}
+        elapsed = round(time.time() - t0, 1)
+        text = (data.get("message", {}) or {}).get("content", "").strip()
+        if not text:
+            return {"error": "Hailo NPU returned an empty response", "elapsed": elapsed}
+        log.info("AI (Hailo-10H): %.1fs, %d chars output", elapsed, len(text))
+        return {"response": text, "elapsed": elapsed}
+
+    def _available(self) -> tuple:
+        """(ok, error_message) for the active backend."""
+        if self._backend == "hailo":
+            if self._hailo_reachable():
+                return True, ""
+            return False, (f"Hailo NPU server not reachable at {self._hailo_url} — "
+                           "run setup/install_hailo.sh and ensure hailo-ollama is running")
+        if _binary_ok(self._llama) and _model_ok(self._model):
+            return True, ""
+        return False, "AI model not installed — run: sudo bash setup/install_ai.sh"
+
     def chat(self, messages: list) -> dict:
-        if not (_binary_ok() and _model_ok()):
-            return {"error": "AI model not installed — run: sudo bash setup/install_ai.sh"}
+        ok, err = self._available()
+        if not ok:
+            return {"error": err}
         if not self._lock.acquire(blocking=False):
             return {"error": "AI is busy — please wait", "busy": True}
         self._busy = True
@@ -423,21 +550,27 @@ class AIEngine:
         }]
         return self.chat(messages)
 
-    def analyze_passwords(self, cracked: list) -> dict:
-        if not cracked:
+    def analyze_passwords(self, items: list) -> dict:
+        """items: cracked captures (dicts with ssid/bssid/password). The model is
+        grounded on a deterministic, literal-password-free analysis from
+        passwords.py rather than the raw keys — better signal, no leakage."""
+        items = [it for it in (items or []) if it.get("password")]
+        if not items:
             return {"error": "No cracked passwords to analyze"}
-        sample = cracked[:12]
-        items  = ", ".join(repr(p) for p in sample)
-        total  = len(cracked)
+        try:
+            import passwords as _pw
+            analysis = _pw.summarize(items)
+        except Exception as e:
+            log.debug("password summarize failed: %s", e)
+            analysis = f"{len(items)} cracked passwords (analysis unavailable)."
         messages = [{
             "role": "user",
             "content": (
-                f"{total} Wi-Fi password{'s' if total != 1 else ''} cracked in this area. "
-                f"Sample ({len(sample)}): {items}\n\n"
-                "For each pattern type found (keyboard walk, year suffix, dictionary word, "
-                "name+digits, router default, etc.) estimate what % of the sample it represents. "
-                "Give 2-3 specific security recommendations relevant to this neighborhood's "
-                "password habits. Do not repeat passwords verbatim."
+                "Here is a deterministic analysis of the Wi-Fi passwords cracked in "
+                f"this area:\n\n{analysis}\n\n"
+                "Explain what these password habits reveal about the neighborhood's "
+                "security posture, which weaknesses to prioritize, and give 2-3 specific, "
+                "actionable recommendations. Do not invent passwords or data not shown above."
             ),
         }]
         return self.chat(messages)
