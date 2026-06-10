@@ -21,7 +21,7 @@ Tamagotchi-style Wi-Fi audit console for the **Raspberry Pi Zero 2W**.
 | Component | Detail |
 |---|---|
 | SBC | Raspberry Pi Zero 2W (BCM2710A1, quad-core Cortex-A53, 512MB RAM) |
-| Wireless | BCM43430A1 (CYW43438) — monitor mode via nexmon DKMS |
+| Wireless | **Synaptics 43436s** (this board's actual chip — NOT a nexmon-supported BCM43430A1). No internal monitor mode; capture/deauth/rogue-AP need a **USB adapter**. See [[project_pi-zero-2w-wifi-chip]]. |
 | Display | Waveshare 2.13" e-ink (250×122) — SPI |
 | Battery | PiSugar 2 — I2C at 0x75 (optional, gracefully skipped if absent) |
 | OS | **Ubuntu Server 24.04 LTS arm64** |
@@ -40,21 +40,35 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 
 ---
 
-## Current Pi status (as of last session)
+## ⏩ Session handoff — continuing on the laptop (2026-06-10)
 
-- Ubuntu Server 24.04 LTS arm64 flashed and booted
-- WiFi connected and working (NetworkManager, static IP pre-configured via NM profile)
-- Swap set up manually (2GB swapfile at `/swapfile`); zram enabled
-- GUI / display manager confirmed absent (`multi-user.target`)
-- Unnecessary services disabled
-- radioman repo **cloned to the Pi**, `setup/install.sh` has been run
-- bettercap and aircrack-ng installed (aircrack built from source → `/usr/local/bin`)
-- **Monitor mode: not yet confirmed working** — still the main open hardware question (see Monitor mode plan)
-- **AI: Phase 1 fix is in the repo but not yet verified on the Pi** — run the verification block below after `git pull && sudo bash setup/update.sh`
+**All of this session's work is in the working tree and UNCOMMITTED.** The user handles all git commits ([[feedback_git]]) — review and commit on the laptop. Nothing here has been verified on the Pi yet; it's code-complete + locally tested (`py_compile`, `node --check`, and per-feature Python unit tests on the dev machine).
+
+**Shipped this session (code-complete, needs Pi verification):**
+- **Save/Delete + Purge** — per-row delete on Networks/Clients/Bluetooth + 1/3/7/15-day purge (shared `wirePurge()` helper). `db.delete_*`/`purge_stale_*`, `DELETE`/`purge` API routes.
+- **Phase 3 — GPS + Wardrive** (`daemon/gps.py`, Leaflet Map tab). See the Phase 3 entry.
+- **Phase 4 — Bluetooth** (`daemon/ble.py`, Bluetooth tab). See the Phase 4 entry.
+- **Active / offensive testing track** — `daemon/authz.py` (deny-by-default chokepoint), `daemon/attack.py` (gated single-target deauth), `daemon/rogueap.py` (arm-gated evil twin), the `scope`/`rogue_*` tables, the **Active** dashboard tab, `[offensive]` config (off by default). See the "Active / offensive testing" section.
+
+**New files added this session:** `daemon/gps.py`, `daemon/ble.py`, `daemon/authz.py`, `daemon/attack.py`, `daemon/rogueap.py`. (`daemon/fingerprint.py` already existed from Phase 2.)
+
+**Next up:** Phase 5 (Password intelligence) — see its starting-point block. Optional follow-up: wire rogue-AP/deauth-forced handshakes into the existing crack queue.
+
+**To run the dashboard on the laptop** (no Pi hardware needed — everything degrades gracefully): `cd daemon && python3 radioman.py ../config/radioman.conf.example` then open `http://127.0.0.1:8080`. GPS/BT/display/PiSugar all report "unavailable" cleanly; the Active tab shows OFFENSIVE MODE OFF unless you set `[offensive] enabled=true` in a local conf copy.
+
+## Current Pi status (as of 2026-06-10)
+
+- Ubuntu Server 24.04 LTS arm64 flashed and booted; headless (`multi-user.target`); 2GB `/swapfile` + zram; repo cloned, `setup/install.sh` run; bettercap + aircrack-ng installed.
+- **WiFi was lost, then fixed this session.** The Ubuntu path's nexmon build had registered `brcmfmac-nexmon/1.0.0` DKMS, which failed to bind the chip (`brcmfmac: probe ... failed with error -110`) and left **no `wlan0`**. Fix that worked: `sudo dkms remove brcmfmac-nexmon/1.0.0 --all && sudo depmod -a && sudo modprobe -r brcmfmac && sudo modprobe brcmfmac` → `wlan0` returned on the **stock** driver; reconnect with `wpa_supplicant`/netplan (this box has no `nmcli`).
+- **Monitor mode on the internal radio is confirmed IMPOSSIBLE** — the chip is a Synaptics 43436s, not nexmon-supported ([[project_pi-zero-2w-wifi-chip]]). nexmon DKMS is removed and should stay removed. **All capture/deauth/rogue-AP features therefore require a USB WiFi adapter** (Monitor mode plan, Stage 3). The internal radio still does managed-mode scanning fine (`wifiscan.py`, always-on).
+- **Thermal throttling is an open hardware issue.** Idle was 83.8°C with `throttled=0x60006` (arm-freq-capped + currently-throttled) — the SoC has no heatsink. Fixes: add a heatsink (primary), and optionally cap `arm_freq=800` in `/boot/firmware/config.txt` + disable `udisks2`/`serial-getty@ttyS0`. Flask is still the dev server (werkzeug) — fine, not the heat source.
+- **AI: Phase 1 fix in repo, not yet verified on the Pi** — see "Verifying Phase 1".
 
 ---
 
-## What's been updated in the codebase (this session)
+## Codebase changes from the earlier Ubuntu-migration session
+
+(Baseline context — predates the feature work in the handoff above.)
 
 ### `setup/install.sh` — full rewrite for Ubuntu
 - OS detection at top (`$OS_ID` from `/etc/os-release`)
@@ -101,12 +115,12 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 
 ## Feature roadmap (in progress — building one phase at a time)
 
-Six features planned (the user's list double-counted GPS), built in order with a check-in before each phase. User chose **"go in order, one at a time."** Status: **Phases 1, 2 & 3 done (code complete, need Pi verification). Phase 4 is next.**
+Six features planned (the user's list double-counted GPS), built in order with a check-in before each phase. User chose **"go in order, one at a time."** Status: **Phases 1–4 done (code complete, need Pi verification). Phase 5 is next.**
 
 1. ✅ **AI reliability** — DONE in code (see `daemon/ai.py` + `dashboard.js` notes above). Live-data grounding was *already implemented* in `_live_context()`; the blocker was inference failing silently. Still needs verifying on the Pi — see "Verifying Phase 1" below.
 2. ✅ **OUI + device fingerprinting** — DONE in code. New `daemon/fingerprint.py` `device_type_for(mac, vendor, ssid, is_ap)` classifies a coarse device type (router/phone/computer/iot/tv/printer/camera/voip/wearable/gaming/sbc/unknown) from the resolved vendor string + SSID hints + randomized-MAC detection. **Decision:** did NOT bundle a 3MB OUI file — vendor lookup already works via nmap's `nmap-mac-prefixes` (a dependency) in `scanner.py` `_load_oui`, so `fingerprint.py` classifies that vendor string instead. Wired into `radioman.py` `_on_network`/`_on_client`/`_on_host`; `device_type` column added to `networks`/`clients`/`hosts` (idempotent `ALTER TABLE`); `dashboard.js` shows a `deviceTag()` icon in the Networks/Clients/LAN-Hosts tables.
 3. ✅ **GPS + Wardrive mode** — DONE in code. New `daemon/gps.py` `GPSReader(mode, device, baud)` with two backends: **gpsd** (python3-gps module, else a raw JSON socket to 127.0.0.1:2947) and **serial** (raw NMEA `$GxGGA`/`$GxRMC` via pyserial). Thread-safe `current_fix()` → `{fix, lat, lon, alt, accuracy, speed, ts}`; degrades to `fix:0` if no gpsd/pyserial/device. DB: `lat`/`lon`/`gps_accuracy`/`gps_rssi` columns on `networks` + a `wardrive_track` table (idempotent `ALTER TABLE`). **Decision:** each AP is stamped at its **strongest-RSSI** position — `db.stamp_network_gps()` only overwrites when `rssi >= gps_rssi` (a separate column from the live `rssi`, so the "best" reference survives later weaker sightings). Wired into `radioman.py` `_on_network` (stamp) + a `_gps_loop` breadcrumb thread (records a `wardrive_track` point every `track_interval`s when moved >~1m). `[gps]` config section added. API: `GET /api/wardrive` (`{networks, track, fix, enabled}`) + `DELETE /api/wardrive/track`. Frontend: new **Map** nav tab → `viewMap()`/`drawMap()` using **Leaflet** (loaded from unpkg CDN in `index.html`, OSM tiles) — APs as circle-markers coloured by security, the track as a polyline, current position in cyan; falls back to a friendly message if `L` is undefined (offline). Works off the always-on managed-mode `wifiscan.py` — **does not need monitor mode**. Note: Leaflet/tiles load in the *viewer's browser* (same CDN assumption as the Google-Fonts `<link>`), not on the Pi. XPLT sync is unaffected (`_network_row()` whitelists columns, so lat/lon aren't pushed).
-4. **Bluetooth scanning** — new `ble.py` (bettercap `ble.recon` or `bluetoothctl`), new `bluetooth` DB table, new dashboard view. Uses the otherwise-idle BT radio.
+4. ✅ **Bluetooth scanning** — DONE in code. New `daemon/ble.py` `BLEScanner` streams sightings from BlueZ **`bluetoothctl`** in interactive mode (`power on` + `scan on`, parse `[NEW]`/`[CHG]` Device lines → MAC/name/RSSI). **Decision:** chose bluetoothctl over bettercap `ble.recon` because bettercap only runs during a Wi-Fi capture session and is bound to `mon0`, whereas the BT controller (`hci0`) is independent — so this gives always-on discovery on the otherwise-idle radio. Pure, tested parser `parse_btctl_line()`; per-device emit debounce (`EMIT_INTERVAL=15s`) so RSSI churn doesn't hammer the DB; degrades cleanly if `bluetoothctl`/controller absent. Classification via new `fingerprint.ble_type_for(mac, vendor, name)` + `_BLE_NAME_RULES` (adds an **`audio`** type 🎧 for earbuds/headsets; names do most of the work since BLE addresses are often randomized with no OUI). DB: new `bluetooth` table (mac PK, name, vendor, rssi, device_type, first/last_seen) + `upsert_bluetooth`/`get_bluetooth`/`delete_bluetooth`/`purge_stale_bluetooth`; a `bluetooth` count was added to `get_stats`. Wired into `radioman.py` (`_on_ble`, init/start/stop, `state["ble"]`, `vendor_lookup=scanner._vendor_for`). `[bluetooth] mode = auto|bluetoothctl|off`. API: `GET /api/bluetooth` + `DELETE /api/bluetooth/<mac>` + `POST /api/bluetooth/purge`. Frontend: new **Bluetooth** nav tab → `viewBluetooth()` (same row-Delete + 1/3/7/15-day Purge UI as Networks, refactored into a shared `wirePurge()` helper) + a Bluetooth KPI on the Overview.
 5. **Password intelligence** — new `passwords.py`: strength scoring, pattern detection (keyboard walks, year suffixes, vendor defaults), cross-network reuse detection. Feeds the AI analyze tab.
 6. **Optional encrypted capture storage** — encrypt `.pcapng` at rest in `capture.py`, PIN-derived key shown on e-ink. Last because the crack queue needs plaintext, so it must interoperate with `cracker.py`.
 
@@ -147,15 +161,59 @@ After `git pull && sudo bash setup/update.sh && sudo systemctl restart radioman`
 - With a fix, the badge turns teal and shows lat/lon ±accuracy; APs seen by `wifiscan.py` get stamped and appear as coloured dots; the breadcrumb polyline grows as you move. **No monitor mode needed** — managed-mode scanning is enough.
 - Leaflet + OSM tiles load from a CDN in the *viewer's browser*, so the laptop viewing the dashboard needs internet (the Pi does not). Offline → a fallback message instead of a crash.
 
-### Phase 4 starting point (Bluetooth scanning)
-- New `daemon/ble.py`: prefer bettercap's `ble.recon` (already a dependency, REST API like `capture.py`) else fall back to `bluetoothctl`/`hcitool lescan`. Expose discovered devices (mac, name, vendor, rssi, type) via a callback like `_on_network`.
-- DB: new `bluetooth` table (mac PK, name, vendor, rssi, device_type, first_seen, last_seen) + `upsert_ble`/`get_ble` helpers; reuse `fingerprint.device_type_for` for classification.
-- Wire a `BLEScanner` into `radioman.__init__`/`start()`/`stop()` + `self._state["ble"]`; `/api/bluetooth` endpoint; new **Bluetooth** nav tab + `viewBluetooth()`.
-- The BT radio (BCM43430A1 shares the chip; `hci0` was up in the service list) is otherwise idle, so this is free signal. Watch for contention if BT and WiFi monitor mode ever run together.
+### Verifying Phase 4 on the Pi
+After `git pull && sudo bash setup/update.sh && sudo systemctl restart radioman`:
+- DB migrates automatically (new `bluetooth` table created by `CREATE TABLE IF NOT EXISTS`).
+- Prereqs: `bluez` installed (`bluetoothctl` on PATH) and the controller unblocked — `rfkill unblock bluetooth`, `bluetoothctl power on`. We saw `hci0` up + Bluetooth unblocked in the earlier service dump, so this should already be the case.
+- Sanity-check the source directly: `bluetoothctl` → `scan on` should stream `[NEW]/[CHG] Device …` lines. That's exactly what `ble.py` parses.
+- In the dashboard, the new **Bluetooth** tab should fill within a minute (phones, earbuds, watches, TVs nearby), each with a device-type icon; the Overview gains a **Bluetooth** KPI. Per-row Delete + Purge work like the Networks view.
+- Runs continuously and independently of Wi-Fi capture (separate `hci0` controller) — **no monitor mode needed**. If the combo chip shows coexistence interference while bettercap holds `mon0`, consider pausing BLE during capture (add a `should_pause=lambda: self.capture.scanning` like `wifiscan.py`); not done yet because they're nominally independent.
+- `mode = off` in `[bluetooth]` disables it entirely.
+
+### Phase 5 starting point (Password intelligence)
+- New `daemon/passwords.py` — pure, no hardware. Operates on already-cracked passwords (`captures.password` where `cracked=1`) and SSIDs.
+  - **Strength scoring**: length, charset classes, entropy estimate.
+  - **Pattern detection**: keyboard walks (`qwerty`, `1q2w3e`), year/date suffixes, `name+digits`, all-lowercase+digits, vendor-default shapes.
+  - **Default-password heuristics**: flag SSIDs whose cracked password matches a known ISP/router default pattern (e.g. 8–10 uppercase-hex, `<word><4-6 digits>`).
+  - **Reuse detection**: same password across multiple BSSIDs/SSIDs.
+- DB: either a `password_analysis` view computed on demand, or add `pw_score`/`pw_flags` columns to `captures` (idempotent `ALTER TABLE`) populated in `_on_cracked`. On-demand analysis is simpler and avoids migration churn.
+- Surface in the **AI analyze** tab (`ai.py` already has an `analyze` path with `type=="passwords"` stubbed in `api.py` `/api/ai/analyze`) — feed `passwords.summarize(...)` into the prompt, and/or a small dashboard panel.
+- No new hardware; this is all post-processing of crack results, so it's safe to build and test fully offline.
+
+## Active / offensive testing (authorized engagements only)
+
+A separate track from the 6-feature roadmap. **Authorized pentest use only** — the entire point of the design is that it *cannot* act outside an explicit allowlist. Built one capability at a time, safeguard first.
+
+### The safeguard (the centerpiece — `daemon/authz.py`)
+Every active action funnels through one chokepoint, `AuthzEngine.is_authorized(target, kind)`, which is **fail-closed / deny-by-default**:
+1. **Deploy-time master switch** — `[offensive] enabled` defaults to `false`. When false the active-testing API returns 403 and the engines refuse to act, so a freshly-flashed device is inert.
+2. **Per-target allowlist** — the `scope` table (Rules of Engagement). Nothing is authorized unless its exact target was explicitly added (with a required `authref` authorization reference). MAC targets are normalized upper-case. *(User chose "allowlist only" — no separate per-engagement arm switch for deauth; the deploy-time flag + allowlist + audit are the guardrails.)*
+3. **Audit trail** — every decision, ALLOW *and* DENY, is written to `events` (levels `active`/`denied`) and surfaced in the dashboard's **Active** tab. `db.get_audit()`.
+
+### Capability 1 — targeted deauth (DONE in code, `daemon/attack.py`)
+`AttackEngine.deauth(bssid, client="", reason="")` — bounces the clients of a single in-scope AP (delegates to bettercap `wifi.deauth <mac>` via the existing `CaptureEngine.send_cmd`) so they reconnect and we capture the handshake. Safety properties (all unit-tested):
+- **Single-target only** — broadcast (`ff:ff:ff:ff:ff:ff`/`00:..`/`*`) is explicitly refused. No "deauth all" / mass-DoS mode exists, by design.
+- Target (and any named client) must pass `is_authorized()`; denials are audited and nothing transmits.
+- **Rate-limited** per target (`[offensive] deauth_min_interval`, default 5s) so it can't become a sustained flood.
+- Requires bettercap/monitor mode active to transmit. (NB: monitor mode needs a USB adapter on this hardware — internal Synaptics 43436s can't; see [[project_pi-zero-2w-wifi-chip]]. The auth/gating logic is hardware-independent and fully testable without it.)
+
+Wiring: `[offensive]` config → `radioman.py` builds `AuthzEngine`+`AttackEngine`, adds `authz`/`attack`/`offensive_enabled` to `state`. API: `GET /api/offensive/status`, `GET/POST/DELETE /api/scope`, `POST /api/attack/deauth` (403 if disabled), `GET /api/audit`. Frontend: **Active** nav tab (red) → `viewActive()` with a Rules-of-Engagement banner, scope add/list/remove (kind = bssid|client|ssid|ip + required auth ref), a per-AP **Deauth** button (enabled only when offensive+scanning), and the audit feed.
+
+### Ergonomic scoping (DONE — so it's field-usable, not per-MAC tedium)
+`authz.is_authorized()` now matches beyond an exact allowlist hit: a **BSSID is authorized if its SSID is in scope** (`db.ssid_for_bssid`), and an **IP is authorized if it's inside any scoped CIDR** (`ipaddress`). So you authorize a whole client network once (one `ssid` or `ip/CIDR` entry) and operate within it. `POST /api/scope/bulk` parses a pasted RoE list (auto-detect MAC→bssid, IP/CIDR→ip, else ssid; optional `kind:` prefix; shared authref). Dashboard **Active** tab leads with an **"Authorized targets — live"** table (discovered APs that are in scope by BSSID or SSID) each with a one-tap **Deauth** — the Pineapple-style flow.
+
+### Capability 2 — rogue AP / evil-twin (DONE in code, `daemon/rogueap.py`)
+Built with the extra guardrail, since an allowlist can't bound who associates. `RogueAPEngine` clones an **in-scope SSID** via hostapd + dnsmasq on a separate AP interface (`[offensive] ap_interface`, default `wlan1` — needs a USB adapter; internal radio can't AP), with a captive portal:
+- **Arm-gated**: `arm(ssid, authref, acknowledge, capture_creds)` requires offensive mode on, `authz.is_ssid_authorized(ssid)` (SSID must be a scope entry), an authref, AND an explicit `acknowledge`. Nothing starts until armed; arm/start/stop/credential-submission all audited.
+- **Captive portal defaults to a benign authorized-assessment notice** that only logs associations (`rogue_clients`). The credential-phishing page is a separate **`capture_creds` opt-in** (off by default), surfaced in the UI with a red toggle + an extra confirm; submissions go to `rogue_captures`, **masked** in `/api/rogueap/loot` (full value stays in DB for the report, mirroring crack masking). No stealth/anti-logging options exist.
+- Degrades cleanly: missing hostapd/dnsmasq/AP-iface → clear error, no crash (gating logic is hardware-independent and unit-tested).
+- API: `GET /api/rogueap/status`, `POST /api/rogueap/{arm,disarm,start,stop}`, `GET/DELETE /api/rogueap/loot` (all 403 when offensive disabled). Frontend: a rogue-AP control card (in-scope SSID dropdown, channel, creds toggle, Arm→Start/Stop) + a loot table.
+
+**Known limitation (documented for the user):** even in-scope, a cloned-SSID AP is RF-indiscriminate — bystanders in range can associate. The arm+ack is the operator's attestation of authorization; the benign-by-default portal limits blast radius. **What's intentionally NOT built:** broadcast/mass deauth, beacon/karma floods, or any untargeted disruption — those are mass-targeting/DoS and were declined regardless of the README disclaimer.
 
 ## Monitor mode plan
 
-Getting monitor mode on the BCM43430A1 with Ubuntu is the main open question. Three stages:
+> **RESOLVED (2026-06-10): Stages 1 & 2 are dead ends — go straight to Stage 3 (USB adapter).** This board's radio is a **Synaptics 43436s**, which nexmon does not support; the nexmon DKMS build actually broke `wlan0` (probe error -110) and was removed. Internal monitor mode is not achievable. The stages below are kept for history. Anything that transmits/captures (handshake capture, deauth, rogue AP) needs an external adapter.
 
 ### Stage 1 — Test native first (do this first, takes 5 min)
 On the Pi after first boot:
@@ -207,15 +265,15 @@ Host machine connects at 10.55.0.2. Scripts for USB setup:
    sudo bash setup/install.sh
    ```
 
-2. **Test native monitor mode** (Stage 1 above) before rebooting after install
+2. **Do NOT build nexmon / test internal monitor mode** — resolved as impossible on this board's Synaptics 43436s (see Monitor mode plan). Skip `install_monitor.sh`.
 
 3. **Reboot** — activates USB gadget, SPI, I2C
 
 4. **Reconnect via USB** at `ubuntu@10.55.0.1`
 
-5. **Verify monitor mode** — `sudo bash setup/install_monitor.sh`
+5. **Attach a USB WiFi adapter** (e.g. Alfa AWUS036ACH / rtl8812au) — required for capture, deauth, and rogue AP. Set its iface in `radioman.conf` (`[capture]`/`[offensive] ap_interface`). Internal radio stays on managed-mode scanning.
 
-6. **Edit config** — `/opt/radioman/radioman.conf` (XPLT token, bettercap credentials, display model)
+6. **Edit config** — `/opt/radioman/radioman.conf` (XPLT token, bettercap credentials, display model; `[offensive] enabled` stays `false` unless running an authorized test)
 
 7. **llama.cpp** (optional AI) — build on Ubuntu laptop: `bash scripts/build_llama_ubuntu.sh radioman.local`
 

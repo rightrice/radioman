@@ -5,6 +5,19 @@ Combines the spirit of Pwnagotchi, Ubiquiti WiFiman, and the Aircrack-ng suite.
 
 > **Recommended OS:** Ubuntu Server 24.04 LTS (arm64). Kali Linux is also supported but has stability issues on the Pi Zero 2W's 512MB RAM.
 
+---
+
+## ⚠️ Authorized & educational use only
+
+radioman includes **active** capabilities (e.g. targeted deauthentication) intended **solely** for:
+
+- penetration tests of networks you **own** or have **explicit written authorization** to assess, or
+- education and research in an **isolated lab** you control.
+
+**Using these features against networks or devices without authorization is illegal** in most jurisdictions (e.g. the US Computer Fraud and Abuse Act, the UK Computer Misuse Act, and equivalents) and can disrupt people who never consented. **You are solely responsible** for operating within the law and the scope of your engagement. The authors accept no liability for misuse.
+
+Because Wi-Fi attacks affect third parties in radio range, radioman is built so active actions **only fire against targets you explicitly place in scope**, and **every attempt is logged** to an audit trail. These controls are intentional — keep them. This notice is a statement of intended use; it is **not** a substitute for those controls.
+
 ## Hardware
 
 | Component | Details |
@@ -26,6 +39,19 @@ Combines the spirit of Pwnagotchi, Ubiquiti WiFiman, and the Aircrack-ng suite.
 - **Tamagotchi personality** — mood engine reflected on the e-ink display
 - **PiSugar 2 battery** — heart-strip display, charging indicator via direct I2C
 - **Web dashboard** — dark/light theme, auto-refresh, capture downloads
+- **Active testing** *(authorized only, off by default)* — scoped targeted deauth + rogue-AP/evil-twin, gated by a Rules-of-Engagement allowlist and an audit trail
+
+---
+
+## Active testing (authorized engagements)
+
+Off by default. Enable on a device you're authorized to test by setting `[offensive] enabled = true` in `radioman.conf` and restarting. Then, in the dashboard **Active** tab:
+
+1. **Add scope.** Authorize targets in the Rules-of-Engagement panel — a BSSID, a whole network by **SSID**, an **IP/CIDR**, or paste your RoE list to bulk-import. Every entry needs an authorization reference. Nothing is actionable until it's in scope.
+2. **Deauth.** The "Authorized targets — live" table shows in-scope APs in range; one tap sends a single-target, rate-limited deauth to force a handshake (needs an AP-capable monitor interface — a USB adapter on the Pi Zero).
+3. **Rogue AP.** Pick an in-scope SSID, **Arm** it (attesting authorization), then **Start**. The captive portal defaults to a benign association test; credential capture is a separate, clearly-marked opt-in. Needs a second AP-capable interface (`[offensive] ap_interface`) plus `hostapd` + `dnsmasq`.
+
+Every allow/deny decision and every action is written to the **Audit Trail** in the same tab. These controls are deliberate — see the [authorized-use notice](#️-authorized--educational-use-only).
 
 ---
 

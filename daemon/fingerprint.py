@@ -10,7 +10,8 @@ It's a best-effort HINT, not device identity: OUI tells you the maker, not the
 product, and many makers (Apple, Samsung, Google, Amazon) span categories.
 Returns one of:
   router phone computer tablet iot tv printer camera voip wearable gaming
-  sbc unknown
+  sbc audio unknown
+(`audio` is BLE-only — earbuds/headsets/speakers — via ble_type_for.)
 """
 
 import logging
@@ -62,6 +63,43 @@ _SSID_RULES = [
     ("computer", ["macbook", "desktop", "-pc", "laptop"]),
     ("camera",   ["ipcam", "ip-cam", "reolink", "hikvision", "dahua"]),
 ]
+
+
+# BLE/Bluetooth advertised names are their own namespace (earbuds, watches,
+# trackers dominate), so they get a dedicated rule list checked before vendor.
+_BLE_NAME_RULES = [
+    ("audio",    ["airpods", "buds", "headphone", "headset", "beats", "jbl",
+                  "bose", "soundcore", "earbuds", "speaker", "soundbar",
+                  "boom", "wf-", "wh-", "powerbeats"]),
+    ("wearable", ["watch", " band", "miband", "mi band", "amazfit", "fitbit",
+                  "garmin", "whoop", "oura", "versa", "galaxy fit", "wear os",
+                  "forerunner", "venu"]),
+    ("phone",    ["iphone", "galaxy", "pixel", "oneplus", "redmi", "huawei"]),
+    ("computer", ["macbook", "imac", "thinkpad", "-pc", "laptop", "surface"]),
+    ("tv",       ["firetv", "fire tv", "bravia", "smart tv", "[tv]", "webos",
+                  "chromecast", "shield"]),
+    ("camera",   ["gopro", "ipcam", "ip-cam", "reolink"]),
+    ("iot",      ["airtag", "smarttag", "tile", "beacon", "tracker", "switchbot",
+                  "thermostat", "smart plug", "smartplug", "sensor", "govee",
+                  "shelly", "ledvance", "smart bulb"]),
+]
+
+
+def ble_type_for(mac: str = "", vendor: str = "", name: str = "") -> str:
+    """Coarse device class for a Bluetooth/BLE sighting. Order: advertised-name
+    hints → vendor (OUI) rules → unknown. Random/static BLE addresses usually
+    have no resolvable vendor, so the name does most of the work."""
+    n = (name or "").lower()
+    for dtype, needles in _BLE_NAME_RULES:
+        if any(x in n for x in needles):
+            return dtype
+
+    v = (vendor or "").lower()
+    if v and v not in ("unknown", "?"):
+        for dtype, needles in _VENDOR_RULES:
+            if any(x in v for x in needles):
+                return dtype
+    return "unknown"
 
 
 def _is_local_mac(mac: str) -> bool:

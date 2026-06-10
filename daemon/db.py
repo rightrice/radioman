@@ -90,8 +90,50 @@ def init(path: str):
             speed REAL
         );
 
+        CREATE TABLE IF NOT EXISTS bluetooth (
+            mac         TEXT PRIMARY KEY,
+            name        TEXT,
+            vendor      TEXT,
+            rssi        INTEGER,
+            device_type TEXT DEFAULT '',
+            first_seen  TEXT,
+            last_seen   TEXT
+        );
+
+        -- Rules of Engagement: explicit allowlist of targets approved for ACTIVE
+        -- (offensive) actions. Empty by default; nothing is in scope unless added.
+        CREATE TABLE IF NOT EXISTS scope (
+            target   TEXT NOT NULL,
+            kind     TEXT NOT NULL,   -- bssid | client | ssid | ip
+            note     TEXT DEFAULT '',
+            authref  TEXT DEFAULT '',  -- engagement / authorization reference
+            added    TEXT,
+            PRIMARY KEY (target, kind)
+        );
+
+        -- Rogue-AP (evil-twin) telemetry from authorized engagements.
+        CREATE TABLE IF NOT EXISTS rogue_clients (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            mac        TEXT,
+            ip         TEXT,
+            ssid       TEXT,
+            user_agent TEXT,
+            ts         TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS rogue_captures (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            ssid       TEXT,
+            username   TEXT,
+            password   TEXT,
+            client_mac TEXT,
+            client_ip  TEXT,
+            ts         TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_clients_bssid ON clients(bssid);
         CREATE INDEX IF NOT EXISTS idx_hosts_last ON hosts(last_seen);
+        CREATE INDEX IF NOT EXISTS idx_bluetooth_last ON bluetooth(last_seen);
         CREATE INDEX IF NOT EXISTS idx_captures_bssid ON captures(bssid);
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
         CREATE INDEX IF NOT EXISTS idx_rssi_bssid_ts ON rssi_history(bssid, ts);
@@ -235,7 +277,8 @@ def get_stats(path: str) -> dict:
             (SELECT COUNT(*) FROM networks)  AS networks,
             (SELECT COUNT(*) FROM clients)   AS clients,
             (SELECT COUNT(*) FROM captures)  AS captures,
-            (SELECT COUNT(*) FROM captures WHERE cracked=1) AS cracked
+            (SELECT COUNT(*) FROM captures WHERE cracked=1) AS cracked,
+            (SELECT COUNT(*) FROM bluetooth) AS bluetooth
     """).fetchone()
     return dict(row) if row else {}
 
@@ -440,6 +483,180 @@ def clear_wardrive_track(path: str) -> int:
     cur = conn.execute("DELETE FROM wardrive_track")
     conn.commit()
     return cur.rowcount
+
+
+# ── Bluetooth / BLE ─────────────────────────────────────────────────────────
+def upsert_bluetooth(path: str, mac: str, name: str = "", vendor: str = "",
+                     rssi: int = 0, device_type: str = "") -> bool:
+    """Insert or update a Bluetooth device. Returns True if newly seen.
+    Non-empty name/vendor/device_type never overwrite an existing value with a blank."""
+    now = datetime.utcnow().isoformat()
+    mac = mac.upper().strip()
+    conn = get_conn(path)
+    is_new = conn.execute("SELECT 1 FROM bluetooth WHERE mac=?", (mac,)).fetchone() is None
+    conn.execute("""
+        INSERT INTO bluetooth (mac, name, vendor, rssi, device_type, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(mac) DO UPDATE SET
+            name=CASE WHEN excluded.name != '' THEN excluded.name ELSE bluetooth.name END,
+            vendor=CASE WHEN excluded.vendor != '' THEN excluded.vendor ELSE bluetooth.vendor END,
+            rssi=excluded.rssi,
+            device_type=CASE WHEN excluded.device_type != '' THEN excluded.device_type ELSE bluetooth.device_type END,
+            last_seen=excluded.last_seen
+    """, (mac, name, vendor, rssi, device_type, now, now))
+    conn.commit()
+    return is_new
+
+
+def get_bluetooth(path: str) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT * FROM bluetooth ORDER BY last_seen DESC LIMIT 500"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_bluetooth(path: str, mac: str) -> bool:
+    conn = get_conn(path)
+    cur = conn.execute("DELETE FROM bluetooth WHERE mac=?", (mac.upper().strip(),))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def purge_stale_bluetooth(path: str, days: int = 7) -> int:
+    conn = get_conn(path)
+    cur = conn.execute(
+        "DELETE FROM bluetooth WHERE last_seen < datetime('now', ?)",
+        (f"-{days} days",)
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+# ── Scope / Rules of Engagement (active-action allowlist) ───────────────────
+def _norm_target(target: str, kind: str) -> str:
+    """MAC-shaped targets are upper-cased; SSIDs/IPs kept verbatim."""
+    target = (target or "").strip()
+    if kind in ("bssid", "client"):
+        return target.upper()
+    return target
+
+
+def add_scope(path: str, target: str, kind: str,
+              note: str = "", authref: str = "") -> None:
+    now = datetime.utcnow().isoformat()
+    conn = get_conn(path)
+    conn.execute(
+        """INSERT INTO scope (target, kind, note, authref, added)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(target, kind) DO UPDATE SET
+               note=excluded.note, authref=excluded.authref""",
+        (_norm_target(target, kind), kind, note.strip(), authref.strip(), now),
+    )
+    conn.commit()
+
+
+def remove_scope(path: str, target: str, kind: str) -> bool:
+    conn = get_conn(path)
+    cur = conn.execute(
+        "DELETE FROM scope WHERE target=? AND kind=?",
+        (_norm_target(target, kind), kind),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def get_scope(path: str) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT target, kind, note, authref, added FROM scope ORDER BY added DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def is_in_scope(path: str, target: str, kind: str) -> bool:
+    if not target:
+        return False
+    conn = get_conn(path)
+    row = conn.execute(
+        "SELECT 1 FROM scope WHERE target=? AND kind=?",
+        (_norm_target(target, kind), kind),
+    ).fetchone()
+    return row is not None
+
+
+def get_audit(path: str, limit: int = 100) -> list:
+    """Active-action audit trail — the subset of events from offensive actions."""
+    conn = get_conn(path)
+    rows = conn.execute(
+        """SELECT * FROM events
+            WHERE level IN ('active', 'denied')
+            ORDER BY id DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_scope_targets(path: str, kind: str) -> list:
+    conn = get_conn(path)
+    rows = conn.execute("SELECT target FROM scope WHERE kind=?", (kind,)).fetchall()
+    return [r["target"] for r in rows]
+
+
+def ssid_for_bssid(path: str, bssid: str) -> str:
+    conn = get_conn(path)
+    row = conn.execute(
+        "SELECT ssid FROM networks WHERE bssid=?", (bssid.upper().strip(),)
+    ).fetchone()
+    return (row["ssid"] if row else "") or ""
+
+
+# ── Rogue AP (evil-twin) telemetry ──────────────────────────────────────────
+def add_rogue_client(path: str, mac: str = "", ip: str = "",
+                     ssid: str = "", user_agent: str = "") -> None:
+    now = datetime.utcnow().isoformat()
+    conn = get_conn(path)
+    conn.execute(
+        "INSERT INTO rogue_clients (mac, ip, ssid, user_agent, ts) VALUES (?, ?, ?, ?, ?)",
+        (mac, ip, ssid, user_agent, now),
+    )
+    conn.commit()
+
+
+def get_rogue_clients(path: str, limit: int = 500) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT * FROM rogue_clients ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_rogue_capture(path: str, ssid: str, username: str, password: str,
+                      client_mac: str = "", client_ip: str = "") -> None:
+    now = datetime.utcnow().isoformat()
+    conn = get_conn(path)
+    conn.execute(
+        """INSERT INTO rogue_captures (ssid, username, password, client_mac, client_ip, ts)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (ssid, username, password, client_mac, client_ip, now),
+    )
+    conn.commit()
+
+
+def get_rogue_captures(path: str, limit: int = 500) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT * FROM rogue_captures ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def clear_rogue(path: str) -> int:
+    conn = get_conn(path)
+    n = conn.execute("DELETE FROM rogue_clients").rowcount
+    n += conn.execute("DELETE FROM rogue_captures").rowcount
+    conn.commit()
+    return n
 
 
 def get_ignored(path: str) -> list:

@@ -787,6 +787,87 @@ body {
 /* Leaflet popups inherit the dark surface for legibility */
 .leaflet-popup-content { font: inherit; font-size: 0.8rem; }
 
+/* ── Active / offensive testing ─────────────────────────────── */
+.rm-nav-danger { color: var(--rm-red); }
+.rm-nav-danger.active { color: var(--rm-red); border-color: var(--rm-red); }
+
+.rm-roe-banner {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+  padding: 0.9rem 1.1rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid rgba(224, 88, 88, 0.4);
+  border-left: 3px solid var(--rm-red);
+  border-radius: 6px;
+  background: var(--rm-red-soft, rgba(224, 88, 88, 0.08));
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+.rm-roe-armed { border-left-width: 5px; }
+.rm-roe-icon { font-size: 1.2rem; line-height: 1; }
+.rm-roe-banner code {
+  font-family: var(--rm-mono, monospace);
+  font-size: 0.8em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.07);
+}
+.rm-roe-state {
+  display: inline-block;
+  margin-top: 0.3rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.rm-roe-on  { background: var(--rm-red); color: #fff; }
+.rm-roe-off { background: rgba(255,255,255,0.08); color: var(--aap-muted); }
+
+.rm-scope-kind {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--rm-teal-soft, rgba(217,98,42,0.12));
+  color: var(--rm-teal);
+}
+
+.rm-deauth-btn {
+  padding: 0.22rem 0.7rem;
+  border-radius: 4px;
+  border: 1px solid var(--rm-red);
+  background: transparent;
+  color: var(--rm-red);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 140ms, color 140ms;
+  white-space: nowrap;
+}
+.rm-deauth-btn:hover:not(:disabled) { background: var(--rm-red); color: #fff; }
+.rm-deauth-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Audit-trail log levels */
+.rm-log-lvl-active { background: rgba(34,197,94,0.18);  color: #22c55e; }
+.rm-log-lvl-denied { background: rgba(224,88,88,0.18);  color: var(--rm-red); }
+
+.rm-roe-cred-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--rm-amber);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rm-roe-cred-toggle input { accent-color: var(--rm-red); }
+
 /* ── XPLT sync panel ────────────────────────────────────────── */
 .rm-xplt-panel { margin-top: 1rem; }
 

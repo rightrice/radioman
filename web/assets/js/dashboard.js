@@ -110,6 +110,7 @@ async function fetchViewData() {
   switch (currentView) {
     case "networks":  return get("/api/networks");
     case "clients":   return get("/api/clients");
+    case "ble":       return get("/api/bluetooth");
     case "captures":  return get("/api/captures");
     case "graph":     return graphMode === "lan" ? get("/api/hosts")
                            : graphMode === "l3"  ? get("/api/topology")
@@ -120,6 +121,7 @@ async function fetchViewData() {
     case "ignore":    return get("/api/ignore");
     case "stats":     return Promise.all([get("/api/networks"), get("/api/stats")]);
     case "ai":        return get("/api/ai/status");
+    case "active":    return Promise.all([get("/api/offensive/status"), get("/api/scope"), get("/api/audit"), get("/api/networks"), get("/api/rogueap/status"), get("/api/rogueap/loot")]);
     case "settings":  return Promise.all([get("/api/settings"), get("/api/wifi/status"), get("/api/networks")]);
     case "overview":  return Promise.all([get("/api/networks"), get("/api/events?limit=3")]);
     default:          return null;
@@ -160,6 +162,7 @@ function renderMain(status, data, xplt = null) {
     }
     case "networks":  main.innerHTML = viewNetworks(data || []); attachIgnoreHandlers(); attachDeleteHandlers(); break;
     case "clients":   main.innerHTML = viewClients(data || []); attachDeleteHandlers(); break;
+    case "ble":       main.innerHTML = viewBluetooth(data || []); attachDeleteHandlers(); break;
     case "captures":  main.innerHTML = viewCaptures(data || []); attachCrackHandlers(); break;
     case "graph": {
       // Build the canvas once; subsequent polls only feed new data (no flash,
@@ -204,6 +207,12 @@ function renderMain(status, data, xplt = null) {
       main.innerHTML = viewAI(data || {});
       attachAIHandlers();
       break;
+    case "active": {
+      const [off, scope, audit, nets, rogue, loot] = Array.isArray(data) ? data : [{}, [], [], [], {}, {}];
+      main.innerHTML = viewActive(off || {}, scope || [], audit || [], nets || [], rogue || {}, loot || {});
+      attachActiveHandlers();
+      break;
+    }
     case "settings": {
       const [settings, wifi, nets] = Array.isArray(data) ? data : [{}, {}, []];
       main.innerHTML = viewSettings(settings || {}, wifi || {}, nets || []);
@@ -247,6 +256,7 @@ function viewOverview(status, xplt, recentNets = [], recentEvents = []) {
       </div>
       ${kpi("Networks", s.networks ?? 0, "teal")}
       ${kpi("Clients", s.clients ?? 0, "teal")}
+      ${kpi("Bluetooth", s.bluetooth ?? 0, s.bluetooth > 0 ? "teal" : "")}
       ${kpi("Handshakes", s.captures ?? 0, s.captures > 0 ? "ok" : "")}
       ${kpi("Cracked", s.cracked ?? 0, s.cracked > 0 ? "ok" : "")}
       ${kpi("Queue", cq.queued ?? 0, cq.queued > 0 ? "warn" : "")}
@@ -469,7 +479,7 @@ function pct2bar(v) {
 const DEVICE_ICONS = {
   router: "📡", phone: "📱", computer: "💻", iot: "💡", tv: "📺",
   printer: "🖨", camera: "📷", voip: "☎️", wearable: "⌚",
-  gaming: "🎮", sbc: "📟",
+  gaming: "🎮", sbc: "📟", audio: "🎧",
 };
 function deviceTag(type) {
   const ic = DEVICE_ICONS[type];
@@ -544,6 +554,45 @@ function viewClients(rows) {
                 <td>${rssiCell(r.rssi)}</td>
                 <td class="rm-muted">${shortDate(r.last_seen)}</td>
                 <td><button class="rm-delete-btn rm-delete-client" data-mac="${esc(r.mac)}" title="Delete this client record">Delete</button></td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// ── Bluetooth ─────────────────────────────────────────────────────────────────
+function viewBluetooth(rows) {
+  if (!rows.length) return empty("🔵", "No Bluetooth devices seen yet");
+  return `
+    <div class="rm-action-bar">
+      <span class="rm-muted">${rows.length} Bluetooth device${rows.length !== 1 ? "s" : ""} seen</span>
+      <span class="rm-purge-group">
+        <label class="rm-muted" for="rmPurgeBleDays">Purge older than</label>
+        <select id="rmPurgeBleDays" class="rm-purge-select">
+          <option value="1">1 day</option>
+          <option value="3">3 days</option>
+          <option value="7" selected>7 days</option>
+          <option value="15">15 days</option>
+        </select>
+        <button class="rm-purge-btn" id="rmPurgeBle" title="Delete BT devices not seen since the chosen age">Purge</button>
+      </span>
+    </div>
+    <div class="dash-panel dash-panel-full">
+      <div class="dash-table-scroll">
+        <table class="dash-table">
+          <thead><tr>
+            <th>Name</th><th>MAC</th><th>Vendor</th><th>Signal</th><th>Last Seen</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td>${deviceTag(r.device_type)}${esc(r.name || "—")}</td>
+                <td class="rm-mono rm-muted">${esc(r.mac)}</td>
+                <td>${esc(r.vendor || "—")}</td>
+                <td>${rssiCell(r.rssi)}</td>
+                <td class="rm-muted">${shortDate(r.last_seen)}</td>
+                <td><button class="rm-delete-btn rm-delete-ble" data-mac="${esc(r.mac)}" title="Delete this device record">Delete</button></td>
               </tr>`).join("")}
           </tbody>
         </table>
@@ -1250,28 +1299,319 @@ function attachDeleteHandlers() {
     });
   });
 
-  const purgeBtn = document.getElementById("rmPurgeNetworks");
-  if (purgeBtn) {
-    purgeBtn.addEventListener("click", async () => {
-      const days = parseInt(document.getElementById("rmPurgeDays")?.value || "7", 10);
-      if (!confirm(`Delete all networks not seen in the last ${days} day${days !== 1 ? "s" : ""}?\nTheir clients and signal history will also be removed.`)) return;
-      purgeBtn.textContent = "Purging…";
-      purgeBtn.disabled = true;
+  document.querySelectorAll(".rm-delete-ble").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const mac = btn.dataset.mac;
+      if (!confirm(`Delete Bluetooth device ${mac}?\nThis cannot be undone.`)) return;
+      btn.textContent = "Deleting…";
+      btn.disabled = true;
       try {
-        const res = await post("/api/networks/purge", { days });
-        purgeBtn.textContent = `Purged ${res.purged ?? 0}`;
-        poll();
+        await del(`/api/bluetooth/${encodeURIComponent(mac)}`);
+        btn.closest("tr").remove();
       } catch (e) {
-        purgeBtn.textContent = "Error";
-        purgeBtn.disabled = false;
+        btn.textContent = "Error";
+        btn.disabled = false;
       }
     });
-  }
+  });
+
+  wirePurge("rmPurgeNetworks", "rmPurgeDays", "/api/networks/purge",
+            d => `Delete all networks not seen in the last ${d} day${d !== 1 ? "s" : ""}?\nTheir clients and signal history will also be removed.`);
+  wirePurge("rmPurgeBle", "rmPurgeBleDays", "/api/bluetooth/purge",
+            d => `Delete all Bluetooth devices not seen in the last ${d} day${d !== 1 ? "s" : ""}?`);
+}
+
+// Shared purge-button wiring for the Networks and Bluetooth views.
+function wirePurge(btnId, selId, endpoint, confirmMsg) {
+  const purgeBtn = document.getElementById(btnId);
+  if (!purgeBtn) return;
+  purgeBtn.addEventListener("click", async () => {
+    const days = parseInt(document.getElementById(selId)?.value || "7", 10);
+    if (!confirm(confirmMsg(days))) return;
+    purgeBtn.textContent = "Purging…";
+    purgeBtn.disabled = true;
+    try {
+      const res = await post(endpoint, { days });
+      purgeBtn.textContent = `Purged ${res.purged ?? 0}`;
+      poll();
+    } catch (e) {
+      purgeBtn.textContent = "Error";
+      purgeBtn.disabled = false;
+    }
+  });
 }
 
 async function del(path) {
   const r = await fetch(API + path, { method: "DELETE" });
   return r.json();
+}
+
+// ── Active / offensive testing (authorized engagements only) ──────────────────
+function viewActive(off, scope, audit, nets, rogue, loot) {
+  const enabled  = !!off.enabled;
+  const scanning = !!off.scanning;
+  const ssidScope  = new Set(scope.filter(s => s.kind === "ssid").map(s => s.target));
+  const bssidScope = new Set(scope.filter(s => s.kind === "bssid").map(s => (s.target || "").toUpperCase()));
+
+  const banner = `
+    <div class="rm-roe-banner ${enabled ? "rm-roe-armed" : ""}">
+      <span class="rm-roe-icon">⚠</span>
+      <div>
+        <strong>Authorized testing only.</strong>
+        Active actions only run against targets in scope, and every attempt is logged.
+        ${enabled
+          ? `<span class="rm-roe-state rm-roe-on">OFFENSIVE MODE ON</span>`
+          : `<span class="rm-roe-state rm-roe-off">OFFENSIVE MODE OFF</span> — set <code>[offensive] enabled=true</code> in <code>radioman.conf</code> and restart to use.`}
+      </div>
+    </div>`;
+
+  // Live, in-scope APs (by exact BSSID or SSID membership) → one-tap deauth.
+  const liveTargets = nets.filter(n =>
+    bssidScope.has((n.bssid || "").toUpperCase()) || ssidScope.has(n.ssid));
+  const targetsCard = `
+    <div class="dash-panel dash-panel-full">
+      <div class="dash-panel-header"><h3>Authorized targets — live</h3>
+        <span class="rm-muted">${liveTargets.length} in range &amp; in scope</span></div>
+      <div class="dash-table-scroll">
+        <table class="dash-table">
+          <thead><tr><th>SSID</th><th>BSSID</th><th>CH</th><th>Signal</th><th>Clients</th><th></th></tr></thead>
+          <tbody>${liveTargets.length ? liveTargets.map(n => `
+            <tr>
+              <td class="rm-table-ssid">${esc(n.ssid || "—")}</td>
+              <td class="rm-mono">${esc(n.bssid)}</td>
+              <td>${n.channel ?? "—"}</td>
+              <td>${rssiCell(n.rssi)}</td>
+              <td>${n.clients ?? 0}</td>
+              <td><button class="rm-deauth-btn" data-bssid="${esc(n.bssid)}" ${enabled && scanning ? "" : "disabled"}
+                    title="${enabled ? (scanning ? "Deauth this AP's clients to force a handshake" : "Start a scan first — monitor mode must be active") : "Enable offensive mode first"}">Deauth</button></td>
+            </tr>`).join("") : `<tr><td colspan="6" class="rm-muted">No in-scope APs in range. Add a BSSID or SSID to scope below.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+  // Rogue AP control card
+  const ssidOptions = [...ssidScope];
+  const rg = rogue || {};
+  const stateChip = rg.running
+    ? `<span class="rm-roe-state rm-roe-on">RUNNING — ${esc(rg.ssid)}</span>`
+    : rg.armed
+      ? `<span class="rm-roe-state" style="background:var(--rm-amber);color:#1a1205">ARMED — ${esc(rg.ssid)}</span>`
+      : `<span class="rm-roe-state rm-roe-off">IDLE</span>`;
+  const rogueCard = `
+    <div class="dash-panel dash-panel-full" style="margin-top:1rem">
+      <div class="dash-panel-header"><h3>Rogue AP — evil twin</h3>${stateChip}</div>
+      <div class="rm-ignore-form">
+        <select class="rm-purge-select" id="rmRogueSsid" ${rg.running ? "disabled" : ""}>
+          ${ssidOptions.length ? ssidOptions.map(s => `<option value="${esc(s)}" ${s === rg.ssid ? "selected" : ""}>${esc(s)}</option>`).join("")
+                               : `<option value="">— add an SSID to scope first —</option>`}
+        </select>
+        <input class="rm-ignore-input" id="rmRogueAuth" placeholder="Authorization ref" maxlength="80" value="${esc(rg.authref || "")}" ${rg.armed ? "disabled" : ""}>
+        <input class="rm-ignore-input rm-mono" id="rmRogueCh" placeholder="ch" maxlength="3" style="width:60px" value="${rg.channel || 6}" ${rg.running ? "disabled" : ""}>
+        <label class="rm-roe-cred-toggle" title="Phishing portal — captures credentials from anyone who connects, in or out of scope. Off by default.">
+          <input type="checkbox" id="rmRogueCreds" ${rg.capture_creds ? "checked" : ""} ${rg.armed ? "disabled" : ""}> capture credentials
+        </label>
+        ${rg.armed
+          ? (rg.running
+              ? `<button class="rm-btn rm-btn-danger" id="rmRogueStop">Stop AP</button>`
+              : `<button class="rm-btn rm-btn-primary" id="rmRogueStart">Start AP</button>
+                 <button class="rm-btn" id="rmRogueDisarm">Disarm</button>`)
+          : `<button class="rm-btn rm-btn-primary" id="rmRogueArm" ${enabled && ssidOptions.length ? "" : "disabled"}>Arm</button>`}
+      </div>
+      ${rg.running ? `<div class="rm-muted" style="padding:0 1.25rem 0.5rem">
+        Live on <span class="rm-mono">${esc(rg.iface)}</span> ch ${rg.channel} ·
+        ${rg.capture_creds ? "credential portal ON" : "association test (no credential capture)"} ·
+        ${rg.clients ?? 0} client(s) seen, ${rg.captures ?? 0} submission(s)</div>` : ""}
+    </div>`;
+
+  // Loot (associations + masked credential captures)
+  const clients = (loot.clients || []);
+  const caps = (loot.captures || []);
+  const lootCard = (clients.length || caps.length) ? `
+    <div class="dash-panel dash-panel-full" style="margin-top:1rem">
+      <div class="dash-panel-header"><h3>Rogue AP loot</h3>
+        <button class="rm-purge-btn" id="rmRogueClear">Clear loot</button></div>
+      <div class="dash-table-scroll">
+        <table class="dash-table">
+          <thead><tr><th>Time</th><th>SSID</th><th>Client</th><th>Username</th><th>Password</th></tr></thead>
+          <tbody>
+            ${caps.map(c => `<tr>
+              <td class="rm-muted">${shortDate(c.ts)}</td><td>${esc(c.ssid || "")}</td>
+              <td class="rm-mono">${esc(c.client_mac || c.client_ip || "—")}</td>
+              <td class="rm-mono">${esc(c.username || "")}</td>
+              <td class="rm-mono">${esc(c.password || "")}</td></tr>`).join("")}
+            ${clients.map(c => `<tr>
+              <td class="rm-muted">${shortDate(c.ts)}</td><td>${esc(c.ssid || "")}</td>
+              <td class="rm-mono">${esc(c.mac || c.ip || "—")}</td>
+              <td class="rm-muted" colspan="2">associated${c.user_agent ? " · " + esc(c.user_agent.slice(0, 40)) : ""}</td></tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>` : "";
+
+  // Scope management
+  const scopeRows = scope.length ? scope.map(s => `
+    <tr>
+      <td><span class="rm-scope-kind">${esc(s.kind)}</span></td>
+      <td class="rm-mono">${esc(s.target)}</td>
+      <td>${esc(s.authref || "—")}</td>
+      <td class="rm-muted">${esc(s.note || "")}</td>
+      <td><button class="rm-delete-btn rm-scope-del" data-kind="${esc(s.kind)}" data-target="${esc(s.target)}">Remove</button></td>
+    </tr>`).join("") : `<tr><td colspan="5" class="rm-muted">Scope is empty — nothing is authorized.</td></tr>`;
+  const scopePanel = `
+    <div class="dash-panel dash-panel-full" style="margin-top:1rem">
+      <div class="dash-panel-header"><h3>Rules of Engagement — Scope</h3>
+        <span class="rm-muted">${scope.length} target${scope.length !== 1 ? "s" : ""}</span></div>
+      <div class="rm-ignore-form">
+        <select class="rm-purge-select" id="rmScopeKind">
+          <option value="bssid">BSSID (AP)</option>
+          <option value="client">Client MAC</option>
+          <option value="ssid">SSID</option>
+          <option value="ip">IP / CIDR</option>
+        </select>
+        <input class="rm-ignore-input rm-mono" id="rmScopeTarget" placeholder="AA:BB:CC:DD:EE:FF" maxlength="64" spellcheck="false">
+        <input class="rm-ignore-input" id="rmScopeAuth" placeholder="Authorization ref (ticket / client / RoE id)" maxlength="80">
+        <button class="rm-btn rm-btn-primary" id="rmScopeAdd">Add</button>
+      </div>
+      <div class="rm-ignore-form" style="padding-top:0">
+        <textarea class="rm-ignore-input" id="rmScopeBulk" rows="2" style="flex:1;min-width:240px;resize:vertical"
+          placeholder="Bulk paste from RoE doc — one per line (MAC→AP, IP/CIDR→ip, else SSID). Optional 'ssid:' / 'bssid:' prefix."></textarea>
+        <button class="rm-btn" id="rmScopeBulkAdd">Import</button>
+      </div>
+      <div class="dash-table-scroll">
+        <table class="dash-table">
+          <thead><tr><th>Kind</th><th>Target</th><th>Auth ref</th><th>Note</th><th></th></tr></thead>
+          <tbody>${scopeRows}</tbody>
+        </table>
+      </div>
+    </div>`;
+
+  const auditRows = audit.length ? audit.map(a => `
+    <div class="rm-log-row">
+      <span class="rm-log-ts">${shortDate(a.ts)}</span>
+      <span class="rm-log-lvl rm-log-lvl-${esc(a.level)}">${a.level === "active" ? "ALLOW" : "DENY"}</span>
+      <span>${esc(a.message)}</span>
+    </div>`).join("") : `<div class="rm-muted" style="padding:1rem">No active actions recorded yet.</div>`;
+  const auditPanel = `
+    <div class="dash-panel dash-panel-full" style="margin-top:1rem">
+      <div class="dash-panel-header"><h3>Audit Trail</h3><span class="rm-muted">${audit.length} entr${audit.length !== 1 ? "ies" : "y"}</span></div>
+      <div class="rm-log-list">${auditRows}</div>
+    </div>`;
+
+  return banner + targetsCard + rogueCard + lootCard + scopePanel + auditPanel;
+}
+
+function attachActiveHandlers() {
+  const kindSel = document.getElementById("rmScopeKind");
+  const targetEl = document.getElementById("rmScopeTarget");
+  if (kindSel && targetEl) {
+    const ph = { bssid: "AA:BB:CC:DD:EE:FF", client: "AA:BB:CC:DD:EE:FF",
+                 ssid: "Target-SSID", ip: "192.168.1.0/24" };
+    kindSel.addEventListener("change", () => { targetEl.placeholder = ph[kindSel.value] || ""; });
+  }
+
+  const addBtn = document.getElementById("rmScopeAdd");
+  if (addBtn) addBtn.addEventListener("click", async () => {
+    const kind    = kindSel?.value || "bssid";
+    const target  = (targetEl?.value || "").trim();
+    const authEl  = document.getElementById("rmScopeAuth");
+    const authref = (authEl?.value || "").trim();
+    if (!target) { targetEl?.focus(); return; }
+    if (!authref) { authEl.style.borderColor = "var(--rm-red)"; authEl.focus(); return; }
+    addBtn.textContent = "Adding…"; addBtn.disabled = true;
+    try {
+      const r = await post("/api/scope", { kind, target, authref });
+      if (r.error) alert(r.error); else poll();
+    } catch (e) { /* ignore */ }
+    addBtn.textContent = "Add"; addBtn.disabled = false;
+  });
+
+  const bulkBtn = document.getElementById("rmScopeBulkAdd");
+  if (bulkBtn) bulkBtn.addEventListener("click", async () => {
+    const text = (document.getElementById("rmScopeBulk")?.value || "").trim();
+    const authref = (document.getElementById("rmScopeAuth")?.value || "").trim();
+    if (!text) return;
+    if (!authref) { alert("Enter an Authorization ref (used for the whole batch) before importing."); return; }
+    bulkBtn.textContent = "Importing…"; bulkBtn.disabled = true;
+    try {
+      const r = await post("/api/scope/bulk", { text, authref });
+      if (r.error) alert(r.error);
+      else { if (r.skipped?.length) alert(`Imported ${r.added}. Skipped (bad MAC): ${r.skipped.join(", ")}`); poll(); }
+    } catch (e) { /* ignore */ }
+    bulkBtn.textContent = "Import"; bulkBtn.disabled = false;
+  });
+
+  document.querySelectorAll(".rm-scope-del").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const { kind, target } = btn.dataset;
+      btn.disabled = true;
+      try {
+        await del(`/api/scope?kind=${encodeURIComponent(kind)}&target=${encodeURIComponent(target)}`);
+        poll();
+      } catch (e) { btn.disabled = false; }
+    });
+  });
+
+  document.querySelectorAll(".rm-deauth-btn").forEach(btn => {
+    if (btn.disabled) return;
+    btn.addEventListener("click", async () => {
+      const bssid = btn.dataset.bssid;
+      if (!confirm(`Send a targeted deauth to ${bssid}?\n\nThis disconnects that AP's clients to force a handshake. Authorized, in-scope targets only — this action is logged.`)) return;
+      btn.textContent = "Deauthing…"; btn.disabled = true;
+      try {
+        const r = await post("/api/attack/deauth", { bssid, reason: "handshake capture" });
+        if (r.ok) { btn.textContent = "Sent ✓"; setTimeout(poll, 1500); }
+        else { alert(r.error || "Deauth failed"); btn.textContent = "Deauth"; btn.disabled = false; }
+      } catch (e) { btn.textContent = "Error"; btn.disabled = false; }
+    });
+  });
+
+  // ── Rogue AP ──
+  const armBtn = document.getElementById("rmRogueArm");
+  if (armBtn) armBtn.addEventListener("click", async () => {
+    const ssid = document.getElementById("rmRogueSsid")?.value || "";
+    const authref = (document.getElementById("rmRogueAuth")?.value || "").trim();
+    const creds = !!document.getElementById("rmRogueCreds")?.checked;
+    if (!ssid) { alert("Select an in-scope SSID."); return; }
+    if (!authref) { alert("Enter an authorization reference to arm."); return; }
+    let msg = `Arm a rogue AP impersonating "${ssid}"?\n\nClients in range may connect to it — including devices outside your scope. You are attesting you are authorized to impersonate this SSID for engagement: ${authref}.`;
+    if (creds) msg += `\n\n⚠ CREDENTIAL CAPTURE IS ON — the portal will capture credentials entered by ANY device that connects.`;
+    if (!confirm(msg)) return;
+    armBtn.textContent = "Arming…"; armBtn.disabled = true;
+    try {
+      const r = await post("/api/rogueap/arm", { ssid, authref, capture_creds: creds, acknowledge: true });
+      if (r.error) alert(r.error);
+      poll();
+    } catch (e) { armBtn.disabled = false; }
+  });
+
+  const startBtn = document.getElementById("rmRogueStart");
+  if (startBtn) startBtn.addEventListener("click", async () => {
+    const channel = parseInt(document.getElementById("rmRogueCh")?.value || "6", 10);
+    startBtn.textContent = "Starting…"; startBtn.disabled = true;
+    try {
+      const r = await post("/api/rogueap/start", { channel });
+      if (r.error) { alert(r.error); }
+      poll();
+    } catch (e) { startBtn.disabled = false; }
+  });
+
+  const stopBtn = document.getElementById("rmRogueStop");
+  if (stopBtn) stopBtn.addEventListener("click", async () => {
+    stopBtn.textContent = "Stopping…"; stopBtn.disabled = true;
+    try { await post("/api/rogueap/stop", {}); poll(); } catch (e) { stopBtn.disabled = false; }
+  });
+
+  const disarmBtn = document.getElementById("rmRogueDisarm");
+  if (disarmBtn) disarmBtn.addEventListener("click", async () => {
+    try { await post("/api/rogueap/disarm", {}); poll(); } catch (e) { /* ignore */ }
+  });
+
+  const clearLoot = document.getElementById("rmRogueClear");
+  if (clearLoot) clearLoot.addEventListener("click", async () => {
+    if (!confirm("Delete all rogue-AP loot (associations + captured submissions)?")) return;
+    try { await del("/api/rogueap/loot"); poll(); } catch (e) { /* ignore */ }
+  });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

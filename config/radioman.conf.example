@@ -63,6 +63,34 @@ target =
 # SNMP version: 1 or 2c
 version = 2c
 
+[offensive]
+# ACTIVE / offensive testing — AUTHORIZED ENGAGEMENTS ONLY.
+# Off by default. When false, the active-testing API is disabled entirely and no
+# deauth/active action can run, regardless of scope. Set to true ONLY on a device
+# you are authorized to use for a sanctioned penetration test.
+#
+# Even when enabled, every action is denied unless its exact target has been
+# added to the Rules-of-Engagement scope allowlist in the dashboard's Active tab,
+# and every attempt (allowed or denied) is written to the audit trail.
+enabled = false
+
+# Minimum seconds between deauth frames to the same target (anti-flood).
+deauth_min_interval = 5
+
+# Rogue-AP (evil-twin) interface. Needs an AP-capable adapter SEPARATE from the
+# monitor/capture radio — typically a USB adapter (the Pi's internal radio can't
+# do AP mode here). The rogue AP only runs against an SSID you've added to scope,
+# only after you arm it with an authorization reference + acknowledgment, and its
+# captive portal defaults to a benign association test (no credential capture
+# unless you explicitly opt in). Requires hostapd + dnsmasq.
+ap_interface = wlan1
+
+[bluetooth]
+# Bluetooth / BLE discovery on the Pi's built-in BT controller (hci0). Runs
+# continuously and independently of Wi-Fi — uses the otherwise-idle radio.
+# mode = auto | bluetoothctl | off   (auto == bluetoothctl)
+mode = auto
+
 [gps]
 # Wardrive mode. mode = off | gpsd | serial
 #   gpsd   — read from a running gpsd (most USB receivers; apt install gpsd python3-gps)

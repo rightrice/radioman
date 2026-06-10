@@ -104,6 +104,182 @@ def create_app(state: dict) -> Flask:
             _db.log_event(_db_path(), "info", f"Deleted network: {bssid.upper()}")
         return jsonify({"removed": removed, "bssid": bssid.upper()})
 
+    # ── Bluetooth / BLE ────────────────────────────────────────────────────────
+    @app.route("/api/bluetooth")
+    def bluetooth():
+        return jsonify(_db.get_bluetooth(_db_path()))
+
+    @app.route("/api/bluetooth/purge", methods=["POST"])
+    def purge_bluetooth():
+        data = request.json or {}
+        days = max(1, int(data.get("days", 7)))
+        count = _db.purge_stale_bluetooth(_db_path(), days)
+        _db.log_event(_db_path(), "info", f"Purged {count} stale BT devices (>{days}d)")
+        return jsonify({"purged": count})
+
+    @app.route("/api/bluetooth/<mac>", methods=["DELETE"])
+    def delete_bluetooth(mac: str):
+        removed = _db.delete_bluetooth(_db_path(), mac.upper())
+        if removed:
+            _db.log_event(_db_path(), "info", f"Deleted BT device: {mac.upper()}")
+        return jsonify({"removed": removed, "mac": mac.upper()})
+
+    # ── Active / offensive testing (authorized engagements only) ────────────────
+    def _offensive_on() -> bool:
+        return bool(state.get("offensive_enabled"))
+
+    _MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+    _SCOPE_KINDS = ("bssid", "client", "ssid", "ip")
+
+    @app.route("/api/offensive/status")
+    def offensive_status():
+        return jsonify({
+            "enabled":     _offensive_on(),
+            "scope_count": len(_db.get_scope(_db_path())),
+            "scanning":    state["capture"].scanning,
+        })
+
+    @app.route("/api/scope", methods=["GET"])
+    def scope_list():
+        return jsonify(_db.get_scope(_db_path()))
+
+    @app.route("/api/scope", methods=["POST"])
+    def scope_add():
+        data    = request.json or {}
+        kind    = (data.get("kind", "bssid") or "bssid").strip().lower()
+        target  = (data.get("target", "") or "").strip()
+        note    = (data.get("note", "") or "").strip()
+        authref = (data.get("authref", "") or "").strip()
+        if kind not in _SCOPE_KINDS:
+            return jsonify({"error": f"kind must be one of {', '.join(_SCOPE_KINDS)}"}), 400
+        if not target:
+            return jsonify({"error": "target required"}), 400
+        if kind in ("bssid", "client") and not _MAC_RE.match(target):
+            return jsonify({"error": "MAC target must look like AA:BB:CC:DD:EE:FF"}), 400
+        if not authref:
+            return jsonify({"error": "authref (authorization reference) is required for scope entries"}), 400
+        _db.add_scope(_db_path(), target, kind, note, authref)
+        _db.log_event(_db_path(), "info", f"Scope + {kind}:{target.upper() if kind in ('bssid','client') else target} (auth: {authref})")
+        return jsonify({"added": True, "target": target, "kind": kind})
+
+    @app.route("/api/scope/bulk", methods=["POST"])
+    def scope_bulk():
+        """Paste a scope list from an RoE doc. One target per line; the kind is
+        auto-detected (MAC→bssid, IP or CIDR→ip, anything else→ssid), or forced
+        with a `kind:` / `kind ` prefix. A shared authref applies to the batch."""
+        data    = request.json or {}
+        text    = data.get("text", "") or ""
+        authref = (data.get("authref", "") or "").strip()
+        note    = (data.get("note", "") or "").strip()
+        if not authref:
+            return jsonify({"error": "authref (authorization reference) is required"}), 400
+        added, skipped = 0, []
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            kind = ""
+            m = re.match(r"^(bssid|client|ssid|ip)[:\s]+(.+)$", line, re.I)
+            if m:
+                kind, line = m.group(1).lower(), m.group(2).strip()
+            if not kind:
+                if _MAC_RE.match(line):
+                    kind = "bssid"
+                elif re.match(r"^\d{1,3}(\.\d{1,3}){3}(/\d{1,2})?$", line):
+                    kind = "ip"
+                else:
+                    kind = "ssid"
+            if kind in ("bssid", "client") and not _MAC_RE.match(line):
+                skipped.append(line)
+                continue
+            _db.add_scope(_db_path(), line, kind, note, authref)
+            added += 1
+        _db.log_event(_db_path(), "info", f"Scope bulk import: +{added} (auth: {authref})")
+        return jsonify({"added": added, "skipped": skipped})
+
+    @app.route("/api/scope", methods=["DELETE"])
+    def scope_remove():
+        kind   = (request.args.get("kind", "") or "").strip().lower()
+        target = (request.args.get("target", "") or "").strip()
+        if kind not in _SCOPE_KINDS or not target:
+            return jsonify({"error": "kind and target query params required"}), 400
+        removed = _db.remove_scope(_db_path(), target, kind)
+        if removed:
+            _db.log_event(_db_path(), "info", f"Scope − {kind}:{target}")
+        return jsonify({"removed": removed})
+
+    @app.route("/api/attack/deauth", methods=["POST"])
+    def attack_deauth():
+        if not _offensive_on():
+            return jsonify({"error": "offensive mode disabled — set [offensive] enabled=true on the device"}), 403
+        data = request.json or {}
+        res = state["attack"].deauth(
+            data.get("bssid", ""), data.get("client", ""), data.get("reason", ""))
+        return jsonify(res), (200 if res.get("ok") else 400)
+
+    @app.route("/api/audit")
+    def audit_feed():
+        return jsonify(_db.get_audit(_db_path(), 100))
+
+    # ── Rogue AP / evil-twin (authorized engagements only) ──────────────────────
+    @app.route("/api/rogueap/status")
+    def rogueap_status():
+        st = state["rogueap"].status()
+        st["clients"] = len(_db.get_rogue_clients(_db_path()))
+        st["captures"] = len(_db.get_rogue_captures(_db_path()))
+        return jsonify(st)
+
+    @app.route("/api/rogueap/arm", methods=["POST"])
+    def rogueap_arm():
+        if not _offensive_on():
+            return jsonify({"error": "offensive mode disabled"}), 403
+        data = request.json or {}
+        res = state["rogueap"].arm(
+            data.get("ssid", ""), data.get("authref", ""),
+            bool(data.get("acknowledge")), bool(data.get("capture_creds")))
+        return jsonify(res), (200 if res.get("ok") else 400)
+
+    @app.route("/api/rogueap/disarm", methods=["POST"])
+    def rogueap_disarm():
+        if not _offensive_on():
+            return jsonify({"error": "offensive mode disabled"}), 403
+        return jsonify(state["rogueap"].disarm())
+
+    @app.route("/api/rogueap/start", methods=["POST"])
+    def rogueap_start():
+        if not _offensive_on():
+            return jsonify({"error": "offensive mode disabled"}), 403
+        data = request.json or {}
+        res = state["rogueap"].start(int(data.get("channel", 6)))
+        return jsonify(res), (200 if res.get("ok") else 400)
+
+    @app.route("/api/rogueap/stop", methods=["POST"])
+    def rogueap_stop():
+        if not _offensive_on():
+            return jsonify({"error": "offensive mode disabled"}), 403
+        return jsonify(state["rogueap"].stop())
+
+    @app.route("/api/rogueap/loot")
+    def rogueap_loot():
+        # Captured credentials are masked in transit; full values stay in the DB
+        # for the engagement report (mirrors the crack-result masking).
+        caps = _db.get_rogue_captures(_db_path(), 200)
+        for c in caps:
+            pw = c.get("password") or ""
+            c["password"] = (pw[:2] + "*" * max(0, len(pw) - 2)) if pw else ""
+        return jsonify({
+            "clients":  _db.get_rogue_clients(_db_path(), 200),
+            "captures": caps,
+        })
+
+    @app.route("/api/rogueap/loot", methods=["DELETE"])
+    def rogueap_loot_clear():
+        if not _offensive_on():
+            return jsonify({"error": "offensive mode disabled"}), 403
+        n = _db.clear_rogue(_db_path())
+        _db.log_event(_db_path(), "info", f"Cleared rogue-AP loot ({n} rows)")
+        return jsonify({"cleared": n})
+
     # ── GPS / wardrive ─────────────────────────────────────────────────────────
     @app.route("/api/wardrive")
     def wardrive():

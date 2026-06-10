@@ -28,6 +28,10 @@ from topology import TopologyMapper
 from xplt import XpltSync
 from ai import AIEngine
 from gps import GPSReader
+from ble import BLEScanner
+from authz import AuthzEngine
+from attack import AttackEngine
+from rogueap import RogueAPEngine
 from api import create_app
 
 logging.basicConfig(
@@ -72,6 +76,8 @@ class Radioman:
         scan_cfg    = flat(cfg, "scan")
         snmp_cfg    = flat(cfg, "snmp")
         gps_cfg     = flat(cfg, "gps")
+        ble_cfg     = flat(cfg, "bluetooth")
+        offensive_cfg = flat(cfg, "offensive")
 
         self._scan_target = scan_cfg.get("target", "").strip()
         self._my_bssid    = scan_cfg.get("my_bssid", "").strip().upper()
@@ -151,6 +157,32 @@ class Radioman:
         )
         self._track_interval = max(2, int(gps_cfg.get("track_interval", 5)))
 
+        # Bluetooth/BLE discovery on the otherwise-idle BT controller. Independent
+        # of the Wi-Fi radio, so it runs continuously. Off via [bluetooth] mode=off.
+        self.ble = BLEScanner(
+            on_device=self._on_ble,
+            mode=ble_cfg.get("mode", "auto"),
+            vendor_lookup=self.scanner._vendor_for,
+        )
+
+        # Active (offensive) testing — OFF by default. Deny-by-default authz
+        # gates every action against the RoE scope allowlist; nothing fires
+        # unless [offensive] enabled=true AND the target is explicitly in scope.
+        self._offensive_enabled = offensive_cfg.get("enabled", "false").strip().lower() == "true"
+        if self._offensive_enabled:
+            log.warning("OFFENSIVE MODE ENABLED — active actions permitted against scoped targets only")
+        self.authz  = AuthzEngine(self._db_path, enabled=self._offensive_enabled)
+        self.attack = AttackEngine(
+            self.capture, self.authz, self._db_path,
+            enabled=self._offensive_enabled,
+            min_interval=int(offensive_cfg.get("deauth_min_interval", 5)),
+        )
+        self.rogueap = RogueAPEngine(
+            self.authz, self._db_path,
+            iface=offensive_cfg.get("ap_interface", "wlan1"),
+            enabled=self._offensive_enabled,
+        )
+
         self._state = {
             "db_path":      self._db_path,
             "conf_path":    self._conf_path,
@@ -171,6 +203,11 @@ class Radioman:
             "ai":         self.ai,
             "topology":   self.topology,
             "gps":        self.gps,
+            "ble":        self.ble,
+            "authz":      self.authz,
+            "attack":     self.attack,
+            "rogueap":    self.rogueap,
+            "offensive_enabled": self._offensive_enabled,
         }
 
         self._running = False
@@ -220,6 +257,15 @@ class Radioman:
         if is_new:
             label = host.get("hostname") or host.get("vendor") or host.get("mac") or ip
             db.log_event(self._db_path, "info", f"LAN host: {ip} ({label})")
+
+    def _on_ble(self, mac, name, rssi, vendor):
+        device_type = fingerprint.ble_type_for(mac, vendor, name)
+        is_new = db.upsert_bluetooth(self._db_path, mac, name, vendor, rssi, device_type)
+        log.debug("BT: %s  %4ddBm  %-8s  %s [%s]",
+                  mac, rssi, device_type, name or "(no name)", vendor or "?")
+        if is_new:
+            label = name or vendor or mac
+            db.log_event(self._db_path, "info", f"Bluetooth: {label} {rssi}dBm")
 
     def _on_capture(self, filepath, bssid, ssid, cap_type):
         if bssid and db.is_ignored(self._db_path, bssid):
@@ -323,6 +369,7 @@ class Radioman:
             log.info("Internal WiFi scanner disabled (wifiscan.enabled=false)")
 
         self.gps.start()
+        self.ble.start()
 
         threading.Thread(target=self._display_loop,    daemon=True, name="display").start()
         threading.Thread(target=self._personality_loop, daemon=True, name="personality").start()
@@ -348,6 +395,8 @@ class Radioman:
         self.wifiscan.stop()
         self.xplt_sync.stop()
         self.gps.stop()
+        self.ble.stop()
+        self.rogueap.stop()
         self.display.sleep()
         db.log_event(self._db_path, "info", "radioman stopped")
         log.info("Goodbye.")
