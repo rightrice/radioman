@@ -81,6 +81,15 @@ def init(path: str):
             last_seen   TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS wardrive_track (
+            id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts    TEXT,
+            lat   REAL,
+            lon   REAL,
+            alt   REAL,
+            speed REAL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_clients_bssid ON clients(bssid);
         CREATE INDEX IF NOT EXISTS idx_hosts_last ON hosts(last_seen);
         CREATE INDEX IF NOT EXISTS idx_captures_bssid ON captures(bssid);
@@ -95,6 +104,10 @@ def init(path: str):
         "ALTER TABLE networks ADD COLUMN device_type TEXT DEFAULT ''",
         "ALTER TABLE clients  ADD COLUMN device_type TEXT DEFAULT ''",
         "ALTER TABLE hosts    ADD COLUMN device_type TEXT DEFAULT ''",
+        "ALTER TABLE networks ADD COLUMN lat REAL",
+        "ALTER TABLE networks ADD COLUMN lon REAL",
+        "ALTER TABLE networks ADD COLUMN gps_accuracy REAL",
+        "ALTER TABLE networks ADD COLUMN gps_rssi INTEGER",
     ]:
         try:
             conn.execute(col_sql)
@@ -364,6 +377,67 @@ def purge_stale_networks(path: str, days: int = 7) -> int:
         "DELETE FROM networks WHERE last_seen < datetime('now', ?)",
         (f"-{days} days",)
     )
+    conn.commit()
+    return cur.rowcount
+
+
+# ── GPS / wardrive ──────────────────────────────────────────────────────────
+def stamp_network_gps(path: str, bssid: str, rssi: int,
+                      lat: float, lon: float, accuracy=None) -> None:
+    """Record the GPS fix for an AP, but only when this sighting is at least as
+    strong as the one the stored location came from — so each AP ends up plotted
+    at its strongest-signal (closest) position. gps_rssi tracks that reference
+    independently of the live `rssi` column, which always holds the latest value."""
+    if lat is None or lon is None:
+        return
+    conn = get_conn(path)
+    conn.execute(
+        """UPDATE networks
+              SET lat=?, lon=?, gps_accuracy=?, gps_rssi=?
+            WHERE bssid=? AND (gps_rssi IS NULL OR ? >= gps_rssi)""",
+        (lat, lon, accuracy, rssi, bssid.upper().strip(), rssi),
+    )
+    conn.commit()
+
+
+def add_track_point(path: str, lat: float, lon: float,
+                    alt=None, speed=None) -> None:
+    if lat is None or lon is None:
+        return
+    now = datetime.utcnow().isoformat()
+    conn = get_conn(path)
+    conn.execute(
+        "INSERT INTO wardrive_track (ts, lat, lon, alt, speed) VALUES (?, ?, ?, ?, ?)",
+        (now, lat, lon, alt, speed),
+    )
+    conn.commit()
+
+
+def get_geo_networks(path: str) -> list:
+    """Networks that have a recorded position, for the wardrive map."""
+    conn = get_conn(path)
+    rows = conn.execute(
+        """SELECT bssid, ssid, rssi, security, vendor, device_type,
+                  lat, lon, gps_accuracy, last_seen
+             FROM networks
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+            ORDER BY last_seen DESC LIMIT 1000"""
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_wardrive_track(path: str, limit: int = 5000) -> list:
+    conn = get_conn(path)
+    rows = conn.execute(
+        "SELECT ts, lat, lon, alt, speed FROM wardrive_track ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in reversed(rows)]
+
+
+def clear_wardrive_track(path: str) -> int:
+    conn = get_conn(path)
+    cur = conn.execute("DELETE FROM wardrive_track")
     conn.commit()
     return cur.rowcount
 

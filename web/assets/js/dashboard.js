@@ -15,6 +15,8 @@ let graphHeat      = {};   // ap id -> 0..1 congestion (drives node colour)
 let graphMode      = "wifi"; // "wifi" (APs↔clients) or "lan" (gateway↔hosts)
 let graphCtx = null, graphW = 0, graphH = 0, graphDpr = 1;
 let MY_BSSID    = "";   // user's own network, set from /api/status
+let rmMap = null, rmMapMarkers = null, rmMapTrack = null, rmMapPos = null;
+let rmMapFitted = false;
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 const root = document.getElementById("rmRoot");
@@ -112,6 +114,7 @@ async function fetchViewData() {
     case "graph":     return graphMode === "lan" ? get("/api/hosts")
                            : graphMode === "l3"  ? get("/api/topology")
                            : get("/api/graph");
+    case "map":       return get("/api/wardrive");
     case "hosts":     return Promise.all([get("/api/hosts"), get("/api/hosts/scanstatus")]);
     case "log":       return get("/api/events?limit=100");
     case "ignore":    return get("/api/ignore");
@@ -167,6 +170,19 @@ function renderMain(status, data, xplt = null) {
                   : (data || { nodes: [], edges: [] });   // wifi + l3 are already {nodes,edges}
       drawGraph(gdata);
       syncTopoUI(graphMode === "l3" ? data : null);
+      break;
+    }
+    case "map": {
+      // Build the container once; the Leaflet instance persists across polls so
+      // the user's pan/zoom isn't reset every 5s. Navigating away wipes the div,
+      // so rebuild + re-init on return.
+      if (!document.getElementById("rmMapCanvas")) {
+        if (rmMap) { try { rmMap.remove(); } catch (e) {} rmMap = null; }
+        main.innerHTML = viewMap();
+        rmMapFitted = false;
+      }
+      attachMapHandlers();
+      drawMap(data || {});
       break;
     }
     case "hosts": {
@@ -465,7 +481,16 @@ function viewNetworks(rows) {
   return `
     <div class="rm-action-bar">
       <span class="rm-muted">${rows.length} network${rows.length !== 1 ? "s" : ""} discovered</span>
-      <button class="rm-purge-btn" id="rmPurgeNetworks" title="Delete networks not seen in 7+ days">Purge stale (7d)</button>
+      <span class="rm-purge-group">
+        <label class="rm-muted" for="rmPurgeDays">Purge older than</label>
+        <select id="rmPurgeDays" class="rm-purge-select">
+          <option value="1">1 day</option>
+          <option value="3">3 days</option>
+          <option value="7" selected>7 days</option>
+          <option value="15">15 days</option>
+        </select>
+        <button class="rm-purge-btn" id="rmPurgeNetworks" title="Delete networks not seen since the chosen age">Purge</button>
+      </span>
     </div>
     <div class="dash-panel dash-panel-full">
       <div class="dash-table-scroll">
@@ -524,6 +549,118 @@ function viewClients(rows) {
         </table>
       </div>
     </div>`;
+}
+
+// ── Map / Wardrive ────────────────────────────────────────────────────────────
+function viewMap() {
+  return `
+    <div class="rm-action-bar">
+      <span class="rm-muted" id="rmMapSummary">Wardrive map</span>
+      <span class="rm-gps-badge" id="rmGpsBadge">GPS: …</span>
+      <button class="rm-purge-btn" id="rmClearTrack" title="Delete the recorded breadcrumb track" style="margin-left:auto">Clear track</button>
+    </div>
+    <div class="dash-panel dash-panel-full">
+      <div id="rmMapCanvas" class="rm-map"></div>
+    </div>`;
+}
+
+// Colour APs on the map by security posture (open = danger, WPA3 = safe).
+function secColor(sec) {
+  const s = (sec || "").toUpperCase();
+  if (s.includes("WPA3")) return "#22c55e";
+  if (s.includes("WPA2")) return "#3b82f6";
+  if (s.includes("WPA"))  return "#eab308";
+  if (s.includes("WEP"))  return "#f97316";
+  if (s.includes("OPEN") || s === "" || s === "NONE") return "#ef4444";
+  return "#94a3b8";
+}
+
+function drawMap(data) {
+  const nets  = data.networks || [];
+  const track = data.track || [];
+  const fix   = data.fix || {};
+  const enabled = !!data.enabled;
+
+  const badge = document.getElementById("rmGpsBadge");
+  if (badge) {
+    if (!enabled)            badge.textContent = "GPS: disabled (set [gps] mode in config)";
+    else if (fix && fix.fix) badge.textContent = `GPS: ${fix.lat.toFixed(5)}, ${fix.lon.toFixed(5)} ±${Math.round(fix.accuracy || 0)}m`;
+    else                     badge.textContent = "GPS: no fix";
+    badge.classList.toggle("rm-gps-on", !!(fix && fix.fix));
+  }
+  const summ = document.getElementById("rmMapSummary");
+  if (summ) summ.textContent = `${nets.length} geolocated network${nets.length !== 1 ? "s" : ""} · ${track.length} track point${track.length !== 1 ? "s" : ""}`;
+
+  const canvas = document.getElementById("rmMapCanvas");
+  if (!canvas) return;
+  if (typeof L === "undefined") {
+    canvas.innerHTML = `<div class="rm-map-fallback">Map library couldn't load — the dashboard host needs internet access to fetch Leaflet &amp; map tiles.</div>`;
+    return;
+  }
+
+  if (!rmMap) {
+    rmMap = L.map(canvas, { attributionControl: true }).setView([0, 0], 2);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: "© OpenStreetMap",
+    }).addTo(rmMap);
+    rmMapTrack   = L.polyline([], { color: "#d9622a", weight: 3, opacity: 0.7 }).addTo(rmMap);
+    rmMapMarkers = L.layerGroup().addTo(rmMap);
+    rmMapFitted  = false;
+  }
+
+  const bounds = [];
+
+  rmMapMarkers.clearLayers();
+  nets.forEach(n => {
+    if (n.lat == null || n.lon == null) return;
+    bounds.push([n.lat, n.lon]);
+    const c = secColor(n.security);
+    const m = L.circleMarker([n.lat, n.lon], {
+      radius: 6, color: c, fillColor: c, fillOpacity: 0.7, weight: 1,
+    });
+    m.bindPopup(`<b>${esc(n.ssid || "—")}</b><br>${esc(n.bssid)}<br>${esc(n.security || "?")} · ${n.rssi}dBm${n.gps_accuracy ? ` · ±${Math.round(n.gps_accuracy)}m` : ""}`);
+    rmMapMarkers.addLayer(m);
+  });
+
+  const tpts = track.filter(t => t.lat != null && t.lon != null).map(t => [t.lat, t.lon]);
+  rmMapTrack.setLatLngs(tpts);
+  tpts.forEach(p => bounds.push(p));
+
+  if (fix && fix.fix && fix.lat != null) {
+    const here = [fix.lat, fix.lon];
+    bounds.push(here);
+    const cm = L.circleMarker(here, {
+      radius: 8, color: "#22d3ee", fillColor: "#22d3ee", fillOpacity: 0.9, weight: 2,
+    }).bindPopup("Current position");
+    rmMapMarkers.addLayer(cm);
+  }
+
+  // Fit to data once, so subsequent polls don't yank the view while panning.
+  if (!rmMapFitted && bounds.length) {
+    rmMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 17 });
+    rmMapFitted = true;
+  }
+  // The container was display:none until now in some flows — recompute size.
+  setTimeout(() => { if (rmMap) rmMap.invalidateSize(); }, 0);
+}
+
+function attachMapHandlers() {
+  const clr = document.getElementById("rmClearTrack");
+  if (clr && !clr._wired) {
+    clr._wired = true;
+    clr.addEventListener("click", async () => {
+      if (!confirm("Delete the recorded wardrive track?\nGeolocated networks are kept.")) return;
+      clr.textContent = "Clearing…";
+      clr.disabled = true;
+      try {
+        await del("/api/wardrive/track");
+        rmMapFitted = false;
+        poll();
+      } catch (e) { clr.textContent = "Error"; }
+      clr.textContent = "Clear track";
+      clr.disabled = false;
+    });
+  }
 }
 
 // ── Captures ──────────────────────────────────────────────────────────────────
@@ -1116,11 +1253,12 @@ function attachDeleteHandlers() {
   const purgeBtn = document.getElementById("rmPurgeNetworks");
   if (purgeBtn) {
     purgeBtn.addEventListener("click", async () => {
-      if (!confirm("Delete all networks not seen in the last 7 days?\nTheir clients and signal history will also be removed.")) return;
+      const days = parseInt(document.getElementById("rmPurgeDays")?.value || "7", 10);
+      if (!confirm(`Delete all networks not seen in the last ${days} day${days !== 1 ? "s" : ""}?\nTheir clients and signal history will also be removed.`)) return;
       purgeBtn.textContent = "Purging…";
       purgeBtn.disabled = true;
       try {
-        const res = await post("/api/networks/purge", { days: 7 });
+        const res = await post("/api/networks/purge", { days });
         purgeBtn.textContent = `Purged ${res.purged ?? 0}`;
         poll();
       } catch (e) {

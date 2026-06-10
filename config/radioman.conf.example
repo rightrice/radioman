@@ -63,6 +63,19 @@ target =
 # SNMP version: 1 or 2c
 version = 2c
 
+[gps]
+# Wardrive mode. mode = off | gpsd | serial
+#   gpsd   — read from a running gpsd (most USB receivers; apt install gpsd python3-gps)
+#   serial — parse raw NMEA straight off a serial/USB dongle (pyserial)
+mode = off
+
+# For serial mode: device node + baud of the GPS dongle
+device = /dev/ttyACM0
+baud = 9600
+
+# Seconds between wardrive breadcrumb points (minimum 2)
+track_interval = 5
+
 [cracker]
 # Path to wordlist
 wordlist = /opt/radioman/wordlists/rockyou.txt

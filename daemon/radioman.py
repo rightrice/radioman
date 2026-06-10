@@ -27,6 +27,7 @@ from wifiscan import WifiScanner
 from topology import TopologyMapper
 from xplt import XpltSync
 from ai import AIEngine
+from gps import GPSReader
 from api import create_app
 
 logging.basicConfig(
@@ -70,6 +71,7 @@ class Radioman:
         wifiscan_cfg = flat(cfg, "wifiscan")
         scan_cfg    = flat(cfg, "scan")
         snmp_cfg    = flat(cfg, "snmp")
+        gps_cfg     = flat(cfg, "gps")
 
         self._scan_target = scan_cfg.get("target", "").strip()
         self._my_bssid    = scan_cfg.get("my_bssid", "").strip().upper()
@@ -140,6 +142,15 @@ class Radioman:
             snmp_version=self._snmp_version,
         )
 
+        # GPS / wardrive mode — stamps each AP with the position of its strongest
+        # sighting and records a breadcrumb track. Off unless [gps] mode is set.
+        self.gps = GPSReader(
+            mode=gps_cfg.get("mode", "off"),
+            device=gps_cfg.get("device", "/dev/ttyACM0"),
+            baud=int(gps_cfg.get("baud", 9600)),
+        )
+        self._track_interval = max(2, int(gps_cfg.get("track_interval", 5)))
+
         self._state = {
             "db_path":      self._db_path,
             "conf_path":    self._conf_path,
@@ -159,6 +170,7 @@ class Radioman:
             "xplt_sync":  self.xplt_sync,
             "ai":         self.ai,
             "topology":   self.topology,
+            "gps":        self.gps,
         }
 
         self._running = False
@@ -172,6 +184,13 @@ class Radioman:
         device_type = fingerprint.device_type_for(bssid, vendor, ssid, is_ap=True)
         is_new = db.upsert_network(self._db_path, bssid, ssid, channel, rssi,
                                    security, vendor, device_type)
+        # Wardrive: stamp the position of the strongest sighting onto the AP.
+        if self.gps.enabled:
+            fix = self.gps.current_fix()
+            if fix.get("fix"):
+                db.stamp_network_gps(self._db_path, bssid, rssi,
+                                     fix.get("lat"), fix.get("lon"),
+                                     fix.get("accuracy"))
         log.debug("AP: %-17s  ch%-3d  %4ddBm  %-6s  %s  [%s]",
                   bssid, channel, rssi, security, ssid or "(hidden)", vendor or "?")
         # Only announce genuinely new APs — re-sightings every scan would spam.
@@ -267,6 +286,23 @@ class Radioman:
                 log.error("Personality loop error: %s", e)
             time.sleep(self._pers_period)
 
+    def _gps_loop(self):
+        """Drop a breadcrumb into wardrive_track whenever we have a fix and have
+        actually moved since the last point (skips parked-still spam)."""
+        last = None
+        while self._running:
+            try:
+                fix = self.gps.current_fix()
+                if fix.get("fix") and fix.get("lat") is not None:
+                    lat, lon = fix["lat"], fix["lon"]
+                    if last is None or abs(lat - last[0]) > 1e-5 or abs(lon - last[1]) > 1e-5:
+                        db.add_track_point(self._db_path, lat, lon,
+                                           fix.get("alt"), fix.get("speed"))
+                        last = (lat, lon)
+            except Exception as e:
+                log.error("GPS loop error: %s", e)
+            time.sleep(self._track_interval)
+
     def _web_loop(self):
         app = create_app(self._state)
         log.info("Web dashboard at http://0.0.0.0:%d", self._web_port)
@@ -286,9 +322,13 @@ class Radioman:
         else:
             log.info("Internal WiFi scanner disabled (wifiscan.enabled=false)")
 
+        self.gps.start()
+
         threading.Thread(target=self._display_loop,    daemon=True, name="display").start()
         threading.Thread(target=self._personality_loop, daemon=True, name="personality").start()
         threading.Thread(target=self._web_loop,         daemon=True, name="web").start()
+        if self.gps.enabled:
+            threading.Thread(target=self._gps_loop, daemon=True, name="gps-track").start()
 
         log.info("All systems go. Press Ctrl+C to stop.")
         db.log_event(self._db_path, "info", "radioman started")
@@ -307,6 +347,7 @@ class Radioman:
         self.scanner.stop()
         self.wifiscan.stop()
         self.xplt_sync.stop()
+        self.gps.stop()
         self.display.sleep()
         db.log_event(self._db_path, "info", "radioman stopped")
         log.info("Goodbye.")

@@ -101,11 +101,11 @@ We switched from Kali Linux to **Ubuntu Server 24.04 LTS** because:
 
 ## Feature roadmap (in progress — building one phase at a time)
 
-Six features planned (the user's list double-counted GPS), built in order with a check-in before each phase. User chose **"go in order, one at a time."** Status: **Phases 1 & 2 done (code complete, need Pi verification). Phase 3 is next.**
+Six features planned (the user's list double-counted GPS), built in order with a check-in before each phase. User chose **"go in order, one at a time."** Status: **Phases 1, 2 & 3 done (code complete, need Pi verification). Phase 4 is next.**
 
 1. ✅ **AI reliability** — DONE in code (see `daemon/ai.py` + `dashboard.js` notes above). Live-data grounding was *already implemented* in `_live_context()`; the blocker was inference failing silently. Still needs verifying on the Pi — see "Verifying Phase 1" below.
 2. ✅ **OUI + device fingerprinting** — DONE in code. New `daemon/fingerprint.py` `device_type_for(mac, vendor, ssid, is_ap)` classifies a coarse device type (router/phone/computer/iot/tv/printer/camera/voip/wearable/gaming/sbc/unknown) from the resolved vendor string + SSID hints + randomized-MAC detection. **Decision:** did NOT bundle a 3MB OUI file — vendor lookup already works via nmap's `nmap-mac-prefixes` (a dependency) in `scanner.py` `_load_oui`, so `fingerprint.py` classifies that vendor string instead. Wired into `radioman.py` `_on_network`/`_on_client`/`_on_host`; `device_type` column added to `networks`/`clients`/`hosts` (idempotent `ALTER TABLE`); `dashboard.js` shows a `deviceTag()` icon in the Networks/Clients/LAN-Hosts tables.
-3. **GPS + Wardrive mode** — new `gps.py` (gpsd or raw NMEA from USB dongle), `lat`/`lon`/`accuracy` columns on networks + a `wardrive_track` table, config section, Leaflet offline map view.
+3. ✅ **GPS + Wardrive mode** — DONE in code. New `daemon/gps.py` `GPSReader(mode, device, baud)` with two backends: **gpsd** (python3-gps module, else a raw JSON socket to 127.0.0.1:2947) and **serial** (raw NMEA `$GxGGA`/`$GxRMC` via pyserial). Thread-safe `current_fix()` → `{fix, lat, lon, alt, accuracy, speed, ts}`; degrades to `fix:0` if no gpsd/pyserial/device. DB: `lat`/`lon`/`gps_accuracy`/`gps_rssi` columns on `networks` + a `wardrive_track` table (idempotent `ALTER TABLE`). **Decision:** each AP is stamped at its **strongest-RSSI** position — `db.stamp_network_gps()` only overwrites when `rssi >= gps_rssi` (a separate column from the live `rssi`, so the "best" reference survives later weaker sightings). Wired into `radioman.py` `_on_network` (stamp) + a `_gps_loop` breadcrumb thread (records a `wardrive_track` point every `track_interval`s when moved >~1m). `[gps]` config section added. API: `GET /api/wardrive` (`{networks, track, fix, enabled}`) + `DELETE /api/wardrive/track`. Frontend: new **Map** nav tab → `viewMap()`/`drawMap()` using **Leaflet** (loaded from unpkg CDN in `index.html`, OSM tiles) — APs as circle-markers coloured by security, the track as a polyline, current position in cyan; falls back to a friendly message if `L` is undefined (offline). Works off the always-on managed-mode `wifiscan.py` — **does not need monitor mode**. Note: Leaflet/tiles load in the *viewer's browser* (same CDN assumption as the Google-Fonts `<link>`), not on the Pi. XPLT sync is unaffected (`_network_row()` whitelists columns, so lat/lon aren't pushed).
 4. **Bluetooth scanning** — new `ble.py` (bettercap `ble.recon` or `bluetoothctl`), new `bluetooth` DB table, new dashboard view. Uses the otherwise-idle BT radio.
 5. **Password intelligence** — new `passwords.py`: strength scoring, pattern detection (keyboard walks, year suffixes, vendor defaults), cross-network reuse detection. Feeds the AI analyze tab.
 6. **Optional encrypted capture storage** — encrypt `.pcapng` at rest in `capture.py`, PIN-derived key shown on e-ink. Last because the crack queue needs plaintext, so it must interoperate with `cracker.py`.
@@ -137,13 +137,21 @@ After `git pull && sudo bash setup/update.sh && sudo systemctl restart radioman`
 - Networks/Clients/LAN-Hosts tables should show a device-type emoji next to each row. Run the internal WiFi scan (it's always on via `wifiscan.py`) or an nmap host scan to populate, then check the icons.
 - Classification is a best-effort hint; tune the rule lists in `daemon/fingerprint.py` (`_VENDOR_RULES` / `_SSID_RULES`) as needed.
 
-### Phase 3 starting point (GPS + Wardrive mode)
-- New `daemon/gps.py`: read from gpsd (`gpsd` + `python3-gps`) if present, else parse raw NMEA from a serial/USB dongle (`/dev/ttyACM0`/`/dev/ttyUSB0`, pyserial). Expose a thread-safe `current_fix()` → `{lat, lon, alt, accuracy, fix, ts}`.
-- DB: add `lat`/`lon`/`gps_accuracy` columns to `networks` (and `clients`?) via the `ALTER TABLE` block; new `wardrive_track` table (ts, lat, lon, alt, speed) for the breadcrumb trail.
-- Stamp the current fix onto each AP in `radioman.py` `_on_network` (and into `wardrive_track` on a timer).
-- Config: `[gps]` section (mode = gpsd|serial|off, device, baud). Add to `radioman.conf.example`.
-- Frontend: a Leaflet map view (offline tiles or OSM), networks plotted by strongest-RSSI fix, the track drawn as a polyline. New nav tab + `viewMap()` + `/api/wardrive` endpoint.
-- Hardware: needs a USB GPS dongle (u-blox etc.). Until one's attached, everything degrades to "no fix" gracefully.
+### Verifying Phase 3 on the Pi
+After `git pull && sudo bash setup/update.sh && sudo systemctl restart radioman`:
+- DB migrates automatically (the `lat`/`lon`/`gps_accuracy`/`gps_rssi` + `wardrive_track` lines are idempotent).
+- The **Map** tab works immediately — with `[gps] mode = off` (default) it just shows an empty world map and a "GPS: disabled" badge. Nothing else breaks without a dongle.
+- To actually wardrive, attach a USB GPS dongle and set `[gps]` in `/opt/radioman/radioman.conf`:
+  - `mode = gpsd` (then `sudo apt install gpsd gpsd-clients python3-gps`, point gpsd at the device) **or** `mode = serial` + `device = /dev/ttyACM0` (then `sudo apt install python3-serial`).
+  - Confirm a fix: gpsd → `gpsmon`/`cgps`; serial → `cat /dev/ttyACM0` should show `$GPGGA…` lines.
+- With a fix, the badge turns teal and shows lat/lon ±accuracy; APs seen by `wifiscan.py` get stamped and appear as coloured dots; the breadcrumb polyline grows as you move. **No monitor mode needed** — managed-mode scanning is enough.
+- Leaflet + OSM tiles load from a CDN in the *viewer's browser*, so the laptop viewing the dashboard needs internet (the Pi does not). Offline → a fallback message instead of a crash.
+
+### Phase 4 starting point (Bluetooth scanning)
+- New `daemon/ble.py`: prefer bettercap's `ble.recon` (already a dependency, REST API like `capture.py`) else fall back to `bluetoothctl`/`hcitool lescan`. Expose discovered devices (mac, name, vendor, rssi, type) via a callback like `_on_network`.
+- DB: new `bluetooth` table (mac PK, name, vendor, rssi, device_type, first_seen, last_seen) + `upsert_ble`/`get_ble` helpers; reuse `fingerprint.device_type_for` for classification.
+- Wire a `BLEScanner` into `radioman.__init__`/`start()`/`stop()` + `self._state["ble"]`; `/api/bluetooth` endpoint; new **Bluetooth** nav tab + `viewBluetooth()`.
+- The BT radio (BCM43430A1 shares the chip; `hci0` was up in the service list) is otherwise idle, so this is free signal. Watch for contention if BT and WiFi monitor mode ever run together.
 
 ## Monitor mode plan
 

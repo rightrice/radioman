@@ -104,6 +104,24 @@ def create_app(state: dict) -> Flask:
             _db.log_event(_db_path(), "info", f"Deleted network: {bssid.upper()}")
         return jsonify({"removed": removed, "bssid": bssid.upper()})
 
+    # ── GPS / wardrive ─────────────────────────────────────────────────────────
+    @app.route("/api/wardrive")
+    def wardrive():
+        gps = state.get("gps")
+        fix = gps.current_fix() if gps else {"fix": 0}
+        return jsonify({
+            "networks": _db.get_geo_networks(_db_path()),
+            "track":    _db.get_wardrive_track(_db_path()),
+            "fix":      fix,
+            "enabled":  bool(gps and gps.enabled),
+        })
+
+    @app.route("/api/wardrive/track", methods=["DELETE"])
+    def clear_track():
+        count = _db.clear_wardrive_track(_db_path())
+        _db.log_event(_db_path(), "info", f"Cleared wardrive track ({count} points)")
+        return jsonify({"cleared": count})
+
     # ── Clients ───────────────────────────────────────────────────────────────
     @app.route("/api/clients")
     def clients():
