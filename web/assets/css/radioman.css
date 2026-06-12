@@ -180,9 +180,8 @@ body {
 /* ── Group sub-nav (second-level tabs under the header) ──────── */
 .rm-groupnav {
   display: none;
-  gap: 0.25rem;
-  align-items: center;
-  padding: 0.4rem 1.5rem;
+  gap: 0.35rem;
+  padding: 0 1.5rem;
   max-width: 1400px;
   margin: 0 auto;
   width: 100%;
@@ -195,24 +194,25 @@ body {
 .rm-groupnav::-webkit-scrollbar { display: none; }
 .rm-groupnav-btn {
   appearance: none;
-  border: 1px solid transparent;
+  border: none;
   background: transparent;
   color: var(--aap-muted);
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 0.85rem;
   font-weight: 600;
-  padding: 0.4rem 0.85rem;
-  border-radius: 999px;
+  padding: 0.65rem 0.9rem;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
   cursor: pointer;
   white-space: nowrap;
-  min-height: 38px;
-  transition: background 140ms, color 140ms;
+  transition: color 140ms, border-color 140ms;
 }
-.rm-groupnav-btn:hover { color: var(--aap-text); background: var(--aap-accent-soft); }
-.rm-groupnav-btn.active {
-  color: var(--rm-teal);
-  background: var(--rm-teal-soft);
-  border-color: rgba(217, 98, 42, 0.25);
+.rm-groupnav-btn:hover { color: var(--aap-text); }
+.rm-groupnav-btn.active { color: var(--rm-teal); border-bottom-color: var(--rm-teal); }
+
+@media (max-width: 600px) {
+  .rm-groupnav { padding: 0 1rem; }
+  .rm-groupnav-btn { padding: 0.6rem 0.7rem; font-size: 0.82rem; }
 }
 
 /* ── Hardware-required gate ──────────────────────────────────── */
