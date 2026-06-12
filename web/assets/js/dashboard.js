@@ -19,6 +19,8 @@ let rmMap = null, rmMapMarkers = null, rmMapTrack = null, rmMapPos = null;
 let rmMapFitted = false;
 let activeTab   = "targets";  // Active-view sub-tab (persists across polls)
 let activeCache = null;       // last Active payload, for instant sub-tab switching
+let accState    = {};         // <details> open-state, preserved across re-renders
+let lastActiveSig = null;     // skip Active re-render when the visible data is unchanged
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 const root = document.getElementById("rmRoot");
@@ -231,8 +233,12 @@ function renderMain(status, data, xplt = null) {
     case "active": {
       const a = Array.isArray(data) ? data : [{}, [], [], [], {}, {}, [], []];
       activeCache = [a[0] || {}, a[1] || [], a[2] || [], a[3] || [], a[4] || {}, a[5] || {}, a[6] || [], a[7] || []];
-      main.innerHTML = viewActive(...activeCache);
-      attachActiveHandlers();
+      const sig = activeSig();
+      if (sig !== lastActiveSig || !main.querySelector(".rm-subnav")) {
+        lastActiveSig = sig;
+        main.innerHTML = viewActive(...activeCache);
+        attachActiveHandlers();
+      }
       break;
     }
     case "settings": {
@@ -1447,6 +1453,28 @@ async function del(path) {
 }
 
 // ── Active / offensive testing (authorized engagements only) ──────────────────
+// Renders a <details open> attribute that honours the user's last manual toggle
+// (tracked in accState) rather than resetting on every poll re-render.
+function accOpen(key, def) {
+  return (key in accState ? accState[key] : def) ? "open" : "";
+}
+
+// A signature of only the data the CURRENT sub-tab actually shows, so the 5s
+// poll re-renders the Active view only when something visible changed (avoids
+// the "refreshing on its own" flicker that collapsed expanded panels).
+function activeSig() {
+  if (!activeCache) return "";
+  const [off, scope, audit, nets, rogue, loot, lab, eng] = activeCache;
+  let d;
+  switch (activeTab) {
+    case "rogue": d = [rogue, loot]; break;
+    case "scope": d = [scope, lab, eng, !!off.enabled]; break;
+    case "audit": d = [audit]; break;
+    default:      d = [!!off.enabled, !!off.scanning, scope, nets, rogue.running, rogue.armed];
+  }
+  return activeTab + "|" + JSON.stringify(d);
+}
+
 function viewActive(off, scope, audit, nets, rogue, loot, lab, engagements) {
   const enabled  = !!off.enabled;
   const scanning = !!off.scanning;
@@ -1475,7 +1503,7 @@ function viewActive(off, scope, audit, nets, rogue, loot, lab, engagements) {
         <button class="rm-eng-end" data-engagement="${esc(e.engagement)}" title="End engagement — clears its ${e.count} scope entr${e.count === 1 ? "y" : "ies"}">×</button></span>`).join("")
     : `<span class="rm-muted">no active engagements</span>`;
   const contextCard = `
-    <details class="dash-panel dash-panel-full rm-acc" style="margin-top:1rem" ${engagements.length ? "" : "open"}>
+    <details class="dash-panel dash-panel-full rm-acc" data-acc="engagement" style="margin-top:1rem" ${accOpen("engagement", engagements.length === 0)}>
       <summary class="rm-acc-summary">
         <span><strong>Engagement context</strong></span>
         <span class="rm-muted rm-acc-hint">${engagements.length ? engagements.length + " active — tap to edit" : "set authorization once →"}</span>
@@ -1752,12 +1780,19 @@ function attachActiveHandlers() {
     btn.addEventListener("click", () => {
       activeTab = btn.dataset.subtab;
       if (activeCache) {
+        lastActiveSig = activeSig();
         document.getElementById("rmMain").innerHTML = viewActive(...activeCache);
         attachActiveHandlers();
       } else {
         poll();
       }
     });
+  });
+
+  // Remember which collapsible panels the user expanded, so a later re-render
+  // (when data changes) doesn't snap them shut.
+  document.querySelectorAll("details.rm-acc[data-acc]").forEach(d => {
+    d.addEventListener("toggle", () => { accState[d.dataset.acc] = d.open; });
   });
 
   const kindSel = document.getElementById("rmScopeKind");

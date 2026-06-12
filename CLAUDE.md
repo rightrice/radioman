@@ -253,7 +253,10 @@ The Active tab had grown to a **9-panel wall**; restructured (user asked for "al
 - **Guided stepper** strip (Enable → Scope a target → Act) with done/current/todo states — the "guided" feel without a rigid wizard.
 - **Engagement context** is a collapsible `<details>` (`.rm-acc`) rendered on *every* sub-tab, so `#rmEngAuth` is always in the DOM and one-tap authorize works from the Targets tab.
 - **Responsive/field**: `.rm-nav` becomes a horizontal scroll-strip ≤760px; field tables (`.rm-cards-sm` + `data-label` on `<td>`s) collapse to stacked cards ≤600px; touch-sized controls (min 40–44px).
-- **Global fix**: `renderMain()` now skips the 5s poll re-render while a form field in `#rmMain` has focus (was wiping in-progress typing on every poll — affected all form-heavy tabs, not just Active).
+- **Poll re-render fixes** (the Active view is stateful, so the 5s poll mustn't fight the user):
+  - `renderMain()` skips the re-render while a form field in `#rmMain` has focus (was wiping in-progress typing).
+  - Active view re-renders only when a **per-sub-tab data signature** (`activeSig()`) changes — so signal-strength churn on `nets` no longer flickers the Scope/Rogue/Audit tabs (Targets still tracks live RSSI).
+  - `<details>` open-state is preserved across re-renders via `accState` + `accOpen()` + a `toggle` listener (data-acc key) — fixes expanded panels snapping shut on poll.
 - Verified by a stubbed-DOM Node harness that executes `viewActive()` for all four sub-tabs (no Flask locally). To re-run the dashboard on the laptop you still need `pip install flask flask-cors requests`.
 
 ### `setup/install_alfa.sh` (new) — external adapter driver (dual-model)
