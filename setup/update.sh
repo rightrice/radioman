@@ -35,6 +35,17 @@ echo ""
 log "Checking for updates..."
 echo ""
 
+# ── Wi-Fi driver guard ─────────────────────────────────────────────────────────
+# This board's radio is a Synaptics 43436s, which nexmon does NOT support. A
+# stray brcmfmac-nexmon DKMS module breaks wlan0 (probe error -110). update.sh
+# never installs it, but a kernel update or a re-run of install_monitor.sh can
+# bring it back — warn loudly so a lost-Wi-Fi event isn't misblamed on update.sh.
+if command -v dkms &>/dev/null && dkms status 2>/dev/null | grep -q "brcmfmac-nexmon"; then
+  warn "brcmfmac-nexmon DKMS module is present — it BREAKS wlan0 on this Synaptics 43436s."
+  warn "Remove it:  sudo dkms remove brcmfmac-nexmon/1.0.0 --all && sudo modprobe -r brcmfmac && sudo modprobe brcmfmac"
+  echo ""
+fi
+
 # ── Git status ─────────────────────────────────────────────────────────────────
 if git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree &>/dev/null; then
   CURRENT=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -171,16 +182,20 @@ else
   same "cmdline.txt: modules-load=dwc2,g_ncm"
 fi
 
-# Ensure usb0 NM profile exists
-if ! nmcli connection show usb-gadget &>/dev/null; then
-  nmcli connection add \
-    type ethernet ifname usb0 con-name "usb-gadget" \
-    ipv4.method manual ipv4.addresses "10.55.0.1/24" \
-    ipv6.method disabled connection.autoconnect yes 2>/dev/null && \
-    change "NetworkManager: usb-gadget profile created (10.55.0.1)" || \
-    warn "NetworkManager: could not create usb-gadget profile"
+# Ensure usb0 NM profile exists (NetworkManager only — degrade cleanly without it)
+if command -v nmcli &>/dev/null; then
+  if ! nmcli connection show usb-gadget &>/dev/null; then
+    nmcli connection add \
+      type ethernet ifname usb0 con-name "usb-gadget" \
+      ipv4.method manual ipv4.addresses "10.55.0.1/24" \
+      ipv6.method disabled connection.autoconnect yes 2>/dev/null && \
+      change "NetworkManager: usb-gadget profile created (10.55.0.1)" || \
+      warn "NetworkManager: could not create usb-gadget profile"
+  else
+    same "NetworkManager: usb-gadget profile"
+  fi
 else
-  same "NetworkManager: usb-gadget profile"
+  same "NetworkManager: nmcli not present — skipping usb-gadget profile (set usb0=10.55.0.1 manually)"
 fi
 echo ""
 

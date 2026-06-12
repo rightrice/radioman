@@ -77,6 +77,27 @@ def create_app(state: dict) -> Flask:
         log.debug("%s %s → %d", request.method, request.path, resp.status_code)
         return resp
 
+    def _capabilities() -> dict:
+        """What the attached hardware can actually do, so the UI can explain/disable
+        features instead of showing empty tables. Monitor mode + injection + AP
+        mode all require a USB Wi-Fi adapter on this board (internal Synaptics
+        43436s can't) — detect one by a USB-backed wlanN interface."""
+        import glob
+        usb_wifi = False
+        for net in glob.glob("/sys/class/net/wlan*"):
+            try:
+                if "usb" in os.path.realpath(os.path.join(net, "device")).lower():
+                    usb_wifi = True
+                    break
+            except Exception:
+                pass
+        gps = state.get("gps")
+        return {
+            "wifi_monitor": usb_wifi,   # handshake capture, client discovery, deauth
+            "rogue_ap":     usb_wifi,   # evil-twin AP
+            "gps":          bool(gps and getattr(gps, "enabled", False)),
+        }
+
     # ── Status ────────────────────────────────────────────────────────────────
     @app.route("/api/status")
     def status():
@@ -90,6 +111,7 @@ def create_app(state: dict) -> Flask:
             "stats":       stats,
             "scanning":    state["capture"].scanning,
             "my_bssid":    state.get("my_bssid", ""),
+            "capabilities": _capabilities(),
             "crack_queue": {
                 "queued": cq.queue_size,
                 "active": cq.active_jobs,

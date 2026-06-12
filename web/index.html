@@ -29,19 +29,13 @@
           </div>
         </div>
         <nav class="rm-nav" id="rmNav">
-          <button class="rm-nav-btn active" data-view="overview">Overview</button>
-          <button class="rm-nav-btn" data-view="networks">Networks</button>
-          <button class="rm-nav-btn" data-view="clients">Clients</button>
-          <button class="rm-nav-btn" data-view="ble">Bluetooth</button>
-          <button class="rm-nav-btn" data-view="captures">Captures</button>
-          <button class="rm-nav-btn" data-view="stats">Stats</button>
-          <button class="rm-nav-btn" data-view="graph">Graph</button>
-          <button class="rm-nav-btn" data-view="map">Map</button>
-          <button class="rm-nav-btn" data-view="hosts">LAN Hosts</button>
-          <button class="rm-nav-btn" data-view="log">Log</button>
-          <button class="rm-nav-btn" data-view="ignore">Ignore List</button>
-          <button class="rm-nav-btn" data-view="ai">AI</button>
-          <button class="rm-nav-btn rm-nav-danger" data-view="active">Active</button>
+          <button class="rm-nav-btn active" data-group="overview">Overview</button>
+          <button class="rm-nav-btn" data-group="discovery">Discovery</button>
+          <button class="rm-nav-btn" data-group="visualize">Visualize</button>
+          <button class="rm-nav-btn" data-group="captures">Captures</button>
+          <button class="rm-nav-btn rm-nav-danger" data-group="active">Active</button>
+          <button class="rm-nav-btn" data-group="ai">AI</button>
+          <button class="rm-nav-btn" data-group="system">System</button>
         </nav>
         <div class="dash-header-right">
           <span class="rm-status-dot" id="rmStatusDot" title="Connection status"></span>
@@ -49,6 +43,9 @@
         </div>
       </div>
     </header>
+
+    <!-- Group sub-nav (populated by JS for multi-view groups) -->
+    <div class="rm-groupnav" id="rmGroupNav" role="tablist"></div>
 
     <!-- Main -->
     <main class="dash-main" id="rmMain" aria-live="polite">

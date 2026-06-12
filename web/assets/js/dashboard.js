@@ -15,6 +15,7 @@ let graphHeat      = {};   // ap id -> 0..1 congestion (drives node colour)
 let graphMode      = "wifi"; // "wifi" (APs↔clients) or "lan" (gateway↔hosts)
 let graphCtx = null, graphW = 0, graphH = 0, graphDpr = 1;
 let MY_BSSID    = "";   // user's own network, set from /api/status
+let CAPS        = {};   // hardware capabilities from /api/status (wifi_monitor, rogue_ap, gps)
 let rmMap = null, rmMapMarkers = null, rmMapTrack = null, rmMapPos = null;
 let rmMapFitted = false;
 let activeTab   = "targets";  // Active-view sub-tab (persists across polls)
@@ -40,15 +41,60 @@ function setTheme(t) {
 setTheme(getTheme());
 settingsBtn.addEventListener("click", () => navigate("settings"));
 
-// ── Navigation ────────────────────────────────────────────────────────────────
+// ── Navigation (grouped: 7 top-level groups, sub-nav for multi-view groups) ────
+const NAV_GROUPS = [
+  { id: "overview",  views: [["overview", "Overview"]] },
+  { id: "discovery", views: [["networks", "Networks"], ["clients", "Clients"], ["ble", "Bluetooth"], ["hosts", "LAN Hosts"]] },
+  { id: "visualize", views: [["graph", "Graph"], ["map", "Map"], ["stats", "Stats"]] },
+  { id: "captures",  views: [["captures", "Captures"]] },
+  { id: "active",    views: [["active", "Active"]] },
+  { id: "ai",        views: [["ai", "AI"]] },
+  { id: "system",    views: [["log", "Log"], ["ignore", "Ignore"], ["settings", "Settings"]] },
+];
+let currentGroup = "overview";
+const groupLastView = {};   // groupId -> last sub-view used, so a group reopens where you left it
+
+function groupForView(view) {
+  return NAV_GROUPS.find(g => g.views.some(v => v[0] === view)) || NAV_GROUPS[0];
+}
+function highlightNav() {
+  document.querySelectorAll("#rmNav .rm-nav-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.group === currentGroup));
+}
+function renderGroupNav() {
+  const host = document.getElementById("rmGroupNav");
+  if (!host) return;
+  const g = NAV_GROUPS.find(x => x.id === currentGroup) || NAV_GROUPS[0];
+  if (g.views.length <= 1) { host.innerHTML = ""; host.classList.remove("rm-groupnav-on"); return; }
+  host.classList.add("rm-groupnav-on");
+  host.innerHTML = g.views.map(([v, label]) =>
+    `<button class="rm-groupnav-btn ${v === currentView ? "active" : ""}" data-view="${v}" role="tab">${label}</button>`
+  ).join("");
+}
+function selectGroup(groupId) {
+  const g = NAV_GROUPS.find(x => x.id === groupId) || NAV_GROUPS[0];
+  currentGroup = g.id;
+  const remembered = groupLastView[g.id];
+  currentView = (remembered && g.views.some(v => v[0] === remembered)) ? remembered : g.views[0][0];
+  groupLastView[g.id] = currentView;
+  highlightNav();
+  renderGroupNav();
+  renderView();
+}
+
 document.getElementById("rmNav").addEventListener("click", e => {
   const btn = e.target.closest(".rm-nav-btn");
+  if (btn) selectGroup(btn.dataset.group);
+});
+document.getElementById("rmGroupNav").addEventListener("click", e => {
+  const btn = e.target.closest(".rm-groupnav-btn");
   if (!btn) return;
-  document.querySelectorAll(".rm-nav-btn").forEach(b => b.classList.remove("active"));
-  btn.classList.add("active");
   currentView = btn.dataset.view;
+  groupLastView[currentGroup] = currentView;
+  renderGroupNav();
   renderView();
 });
+renderGroupNav();   // initial paint (overview group has one view → hidden)
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 async function get(path) {
@@ -166,6 +212,7 @@ function renderMain(status, data, xplt = null) {
   }
 
   MY_BSSID = (status?.my_bssid || "").toUpperCase();
+  CAPS = status?.capabilities || {};
   // Stop the graph animation loop when not viewing it.
   if (currentView !== "graph" && graphAnim) {
     cancelAnimationFrame(graphAnim); graphAnim = null;
@@ -562,8 +609,10 @@ function viewNetworks(rows) {
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 function viewClients(rows) {
-  if (!rows.length) return empty("📱", "No clients discovered yet");
+  const gate = CAPS.wifi_monitor ? "" : hwGate(GATE_MONITOR);
+  if (!rows.length) return gate + empty("📱", CAPS.wifi_monitor ? "No clients discovered yet" : "No clients — monitor mode required");
   return `
+    ${gate}
     <div class="rm-action-bar">
       <span class="rm-muted">${rows.length} client${rows.length !== 1 ? "s" : ""} seen</span>
     </div>
@@ -795,8 +844,10 @@ function vaultBanner(v) {
 }
 
 function viewCaptures(rows, pwAnalysis, vault) {
-  if (!rows.length) return (vaultBanner(vault) || "") + empty("🔐", "No handshakes captured yet");
+  const gate = CAPS.wifi_monitor ? "" : hwGate(GATE_MONITOR);
+  if (!rows.length) return gate + (vaultBanner(vault) || "") + empty("🔐", "No handshakes captured yet");
   return `
+    ${gate}
     <div class="rm-action-bar">
       <span class="rm-muted">${rows.length} capture${rows.length !== 1 ? "s" : ""}</span>
     </div>
@@ -1749,10 +1800,10 @@ function viewActive(off, scope, audit, nets, rogue, loot, lab, engagements) {
 
   let body;
   switch (activeTab) {
-    case "rogue": body = rogueCard + (lootCard || ""); break;
+    case "rogue": body = (CAPS.rogue_ap ? "" : hwGate("Rogue AP needs a USB Wi-Fi adapter with AP-mode support, plus hostapd + dnsmasq. Scope setup still works here.")) + rogueCard + (lootCard || ""); break;
     case "scope": body = scopePanel + labCard; break;
     case "audit": body = auditPanel; break;
-    default:      body = targetsCard + discoverCard;   // "targets"
+    default:      body = (CAPS.wifi_monitor ? "" : hwGate(GATE_MONITOR)) + targetsCard + discoverCard;   // "targets"
   }
 
   return banner + contextCard + stepper + subnav + body;
@@ -1981,6 +2032,20 @@ function empty(icon, msg) {
   return `<div class="rm-empty"><div class="rm-empty-icon">${icon}</div><p>${msg}</p></div>`;
 }
 
+// Explain-and-disable notice for features that need hardware not currently
+// attached (USB Wi-Fi adapter, GPS, PiSugar). Honest > empty tables in the field.
+function hwGate(msg) {
+  return `
+    <div class="rm-hwgate">
+      <span class="rm-hwgate-icon">🔌</span>
+      <div>
+        <div class="rm-hwgate-title">Hardware required</div>
+        <div class="rm-muted">${msg}</div>
+      </div>
+    </div>`;
+}
+const GATE_MONITOR = "Needs a USB Wi-Fi adapter in monitor mode (e.g. Alfa AWUS036ACH) — the Pi's internal Synaptics radio can't capture handshakes or see Wi-Fi clients. Managed-mode AP scanning still works on the Networks tab.";
+
 function makeHearts(pct, total = 5) {
   if (pct < 0) return "♡".repeat(total);
   const filled = Math.round((pct / 100) * total);
@@ -2020,10 +2085,12 @@ function shortDate(iso) {
 }
 
 function navigate(view) {
+  const g = groupForView(view);
+  currentGroup = g.id;
   currentView = view;
-  document.querySelectorAll(".rm-nav-btn").forEach(b => {
-    b.classList.toggle("active", b.dataset.view === view);
-  });
+  groupLastView[g.id] = view;
+  highlightNav();
+  renderGroupNav();
   renderView();
 }
 
