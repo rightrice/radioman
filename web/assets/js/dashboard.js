@@ -17,6 +17,8 @@ let graphCtx = null, graphW = 0, graphH = 0, graphDpr = 1;
 let MY_BSSID    = "";   // user's own network, set from /api/status
 let rmMap = null, rmMapMarkers = null, rmMapTrack = null, rmMapPos = null;
 let rmMapFitted = false;
+let activeTab   = "targets";  // Active-view sub-tab (persists across polls)
+let activeCache = null;       // last Active payload, for instant sub-tab switching
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 const root = document.getElementById("rmRoot");
@@ -148,6 +150,19 @@ function renderView() {
 
 function renderMain(status, data, xplt = null) {
   const main = document.getElementById("rmMain");
+
+  // Don't let the 5s poll clobber a form the user is typing into. Keep the
+  // Active payload cached (so a manual sub-tab switch is still fresh), then bail.
+  const ae = document.activeElement;
+  if (ae && ae !== document.body && main.contains(ae) &&
+      /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) {
+    if (currentView === "active" && Array.isArray(data)) {
+      const a = data;
+      activeCache = [a[0] || {}, a[1] || [], a[2] || [], a[3] || [], a[4] || {}, a[5] || {}, a[6] || [], a[7] || []];
+    }
+    return;
+  }
+
   MY_BSSID = (status?.my_bssid || "").toUpperCase();
   // Stop the graph animation loop when not viewing it.
   if (currentView !== "graph" && graphAnim) {
@@ -214,8 +229,9 @@ function renderMain(status, data, xplt = null) {
       attachAIHandlers();
       break;
     case "active": {
-      const [off, scope, audit, nets, rogue, loot, lab, engagements] = Array.isArray(data) ? data : [{}, [], [], [], {}, {}, [], []];
-      main.innerHTML = viewActive(off || {}, scope || [], audit || [], nets || [], rogue || {}, loot || {}, lab || [], engagements || []);
+      const a = Array.isArray(data) ? data : [{}, [], [], [], {}, {}, [], []];
+      activeCache = [a[0] || {}, a[1] || [], a[2] || [], a[3] || [], a[4] || {}, a[5] || {}, a[6] || [], a[7] || []];
+      main.innerHTML = viewActive(...activeCache);
       attachActiveHandlers();
       break;
     }
@@ -1459,22 +1475,26 @@ function viewActive(off, scope, audit, nets, rogue, loot, lab, engagements) {
         <button class="rm-eng-end" data-engagement="${esc(e.engagement)}" title="End engagement — clears its ${e.count} scope entr${e.count === 1 ? "y" : "ies"}">×</button></span>`).join("")
     : `<span class="rm-muted">no active engagements</span>`;
   const contextCard = `
-    <div class="dash-panel dash-panel-full" style="margin-top:1rem">
-      <div class="dash-panel-header"><h3>Engagement context</h3>
-        <span class="rm-muted">applies to one-tap authorize, manual add, bulk &amp; lab</span></div>
-      <div class="rm-ignore-form">
-        <input class="rm-ignore-input" id="rmEngAuth" placeholder="Authorization ref (ticket / client / RoE id)" maxlength="80" style="flex:2;min-width:220px">
-        <input class="rm-ignore-input" id="rmEngName" placeholder="Engagement label (optional)" maxlength="80" style="flex:1;min-width:140px">
-        <select class="rm-purge-select" id="rmEngTtl" title="Auto-expire scope entries added with this context">
-          <option value="0">No expiry</option>
-          <option value="4">Expires 4h</option>
-          <option value="8">Expires 8h</option>
-          <option value="24">Expires 24h</option>
-          <option value="72">Expires 72h</option>
-        </select>
+    <details class="dash-panel dash-panel-full rm-acc" style="margin-top:1rem" ${engagements.length ? "" : "open"}>
+      <summary class="rm-acc-summary">
+        <span><strong>Engagement context</strong></span>
+        <span class="rm-muted rm-acc-hint">${engagements.length ? engagements.length + " active — tap to edit" : "set authorization once →"}</span>
+      </summary>
+      <div class="rm-acc-body">
+        <div class="rm-ignore-form">
+          <input class="rm-ignore-input" id="rmEngAuth" placeholder="Authorization ref (ticket / client / RoE id)" maxlength="80" style="flex:2;min-width:220px">
+          <input class="rm-ignore-input" id="rmEngName" placeholder="Engagement label (optional)" maxlength="80" style="flex:1;min-width:140px">
+          <select class="rm-purge-select" id="rmEngTtl" title="Auto-expire scope entries added with this context">
+            <option value="0">No expiry</option>
+            <option value="4">Expires 4h</option>
+            <option value="8">Expires 8h</option>
+            <option value="24">Expires 24h</option>
+            <option value="72">Expires 72h</option>
+          </select>
+        </div>
+        <div class="rm-eng-chips">${engChips}</div>
       </div>
-      <div class="rm-eng-chips">${engChips}</div>
-    </div>`;
+    </details>`;
 
   // Live, in-scope APs (by exact BSSID or SSID membership) → one-tap deauth.
   const liveTargets = nets.filter(n =>
@@ -1484,18 +1504,18 @@ function viewActive(off, scope, audit, nets, rogue, loot, lab, engagements) {
       <div class="dash-panel-header"><h3>Authorized targets — live</h3>
         <span class="rm-muted">${liveTargets.length} in range &amp; in scope</span></div>
       <div class="dash-table-scroll">
-        <table class="dash-table">
+        <table class="dash-table rm-cards-sm">
           <thead><tr><th>SSID</th><th>BSSID</th><th>CH</th><th>Signal</th><th>Clients</th><th></th></tr></thead>
           <tbody>${liveTargets.length ? liveTargets.map(n => `
             <tr>
-              <td class="rm-table-ssid">${esc(n.ssid || "—")}</td>
-              <td class="rm-mono">${esc(n.bssid)}</td>
-              <td>${n.channel ?? "—"}</td>
-              <td>${rssiCell(n.rssi)}</td>
-              <td>${n.clients ?? 0}</td>
-              <td><button class="rm-deauth-btn" data-bssid="${esc(n.bssid)}" ${enabled && scanning ? "" : "disabled"}
+              <td data-label="SSID" class="rm-table-ssid">${esc(n.ssid || "—")}</td>
+              <td data-label="BSSID" class="rm-mono">${esc(n.bssid)}</td>
+              <td data-label="CH">${n.channel ?? "—"}</td>
+              <td data-label="Signal">${rssiCell(n.rssi)}</td>
+              <td data-label="Clients">${n.clients ?? 0}</td>
+              <td data-label=""><button class="rm-deauth-btn" data-bssid="${esc(n.bssid)}" ${enabled && scanning ? "" : "disabled"}
                     title="${enabled ? (scanning ? "Deauth this AP's clients to force a handshake" : "Start a scan first — monitor mode must be active") : "Enable offensive mode first"}">Deauth</button></td>
-            </tr>`).join("") : `<tr><td colspan="6" class="rm-muted">No in-scope APs in range. Add a BSSID or SSID to scope below.</td></tr>`}
+            </tr>`).join("") : `<tr><td colspan="6" class="rm-muted">No in-scope APs in range yet — open the <strong>Scope</strong> tab, or tap <strong>+ Add</strong> on an AP below.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1513,15 +1533,15 @@ function viewActive(off, scope, audit, nets, rogue, loot, lab, engagements) {
       <div class="dash-panel-header"><h3>In range — not in scope</h3>
         <span class="rm-muted">${unscoped.length} discovered AP${unscoped.length !== 1 ? "s" : ""}</span></div>
       <div class="dash-table-scroll">
-        <table class="dash-table">
+        <table class="dash-table rm-cards-sm">
           <thead><tr><th>SSID</th><th>BSSID</th><th>CH</th><th>Signal</th><th></th></tr></thead>
           <tbody>${unscoped.length ? unscoped.map(n => `
             <tr>
-              <td class="rm-table-ssid">${esc(n.ssid || "—")}</td>
-              <td class="rm-mono">${esc(n.bssid)}</td>
-              <td>${n.channel ?? "—"}</td>
-              <td>${rssiCell(n.rssi)}</td>
-              <td>
+              <td data-label="SSID" class="rm-table-ssid">${esc(n.ssid || "—")}</td>
+              <td data-label="BSSID" class="rm-mono">${esc(n.bssid)}</td>
+              <td data-label="CH">${n.channel ?? "—"}</td>
+              <td data-label="Signal">${rssiCell(n.rssi)}</td>
+              <td data-label="">
                 <button class="rm-authz-btn" data-kind="bssid" data-target="${esc(n.bssid)}" title="Add this AP (BSSID) to scope using the engagement context above">+ BSSID</button>
                 ${n.ssid ? `<button class="rm-authz-btn" data-kind="ssid" data-target="${esc(n.ssid)}" title="Authorize the whole SSID — every AP broadcasting this name becomes in-scope">+ SSID</button>` : ""}
               </td>
@@ -1674,8 +1694,40 @@ function viewActive(off, scope, audit, nets, rogue, loot, lab, engagements) {
       <div class="rm-log-list">${auditRows}</div>
     </div>`;
 
-  return banner + contextCard + targetsCard + discoverCard + rogueCard + lootCard
-       + labCard + scopePanel + auditPanel;
+  // Guided stepper — shows where you are in the flow without forcing a wizard.
+  const stepState = (done, current) => done ? "done" : (current ? "current" : "todo");
+  const s1 = enabled, s2 = scope.length > 0;
+  const stepper = `
+    <div class="rm-stepper">
+      <div class="rm-step rm-step-${stepState(s1, !s1)}"><span class="rm-step-n">${s1 ? "✓" : "1"}</span>Enable</div>
+      <span class="rm-step-sep"></span>
+      <div class="rm-step rm-step-${stepState(s2, s1 && !s2)}"><span class="rm-step-n">${s2 ? "✓" : "2"}</span>Scope a target</div>
+      <span class="rm-step-sep"></span>
+      <div class="rm-step rm-step-${stepState(false, s1 && s2)}"><span class="rm-step-n">3</span>Act</div>
+    </div>`;
+
+  // Sub-tabs — one focused screen at a time instead of a 9-panel wall.
+  const rg2 = rogue || {};
+  const rogueBadge = rg2.running ? "●" : (rg2.armed ? "◐" : null);
+  const subtab = (id, label, badge) =>
+    `<button class="rm-subtab ${activeTab === id ? "active" : ""}" data-subtab="${id}">${label}${(badge !== null && badge !== "") ? ` <span class="rm-subtab-badge">${badge}</span>` : ""}</button>`;
+  const subnav = `
+    <div class="rm-subnav">
+      ${subtab("targets", "Targets", liveTargets.length)}
+      ${subtab("rogue", "Rogue AP", rogueBadge)}
+      ${subtab("scope", "Scope", scope.length)}
+      ${subtab("audit", "Audit", audit.length)}
+    </div>`;
+
+  let body;
+  switch (activeTab) {
+    case "rogue": body = rogueCard + (lootCard || ""); break;
+    case "scope": body = scopePanel + labCard; break;
+    case "audit": body = auditPanel; break;
+    default:      body = targetsCard + discoverCard;   // "targets"
+  }
+
+  return banner + contextCard + stepper + subnav + body;
 }
 
 // Read the shared engagement context (authref / label / ttl) used by every
@@ -1695,6 +1747,19 @@ function engagementContext() {
 }
 
 function attachActiveHandlers() {
+  // Sub-tab switching — instant re-render from the cached payload (no refetch).
+  document.querySelectorAll(".rm-subtab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeTab = btn.dataset.subtab;
+      if (activeCache) {
+        document.getElementById("rmMain").innerHTML = viewActive(...activeCache);
+        attachActiveHandlers();
+      } else {
+        poll();
+      }
+    });
+  });
+
   const kindSel = document.getElementById("rmScopeKind");
   const targetEl = document.getElementById("rmScopeTarget");
   if (kindSel && targetEl) {

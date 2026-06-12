@@ -247,6 +247,15 @@ The user asked to "remove all safeguards" to spin up rogue APs as needed. We **k
 - **"My Lab"** — a `lab_targets` table of the operator's own networks + an **Apply lab to scope** button (one click adds them all, authref `owned-lab`, engagement `lab`). API: `GET/POST/DELETE /api/lab`, `POST /api/lab/apply`.
 - DB: `scope` gained `engagement`+`expires` (idempotent ALTER); new `lab_targets` table; helpers `get_engagements`/`clear_engagement`/`purge_expired_scope`/`add_lab_target`/`get_lab_targets`/`remove_lab_target`. All unit-tested (db + Flask test-client + authz boundary incl. expiry). `authz.py` unchanged.
 
+### Dashboard UX redesign (2026-06-11) — Active tab + responsive pass
+The Active tab had grown to a **9-panel wall**; restructured (user asked for "all three" of sub-tabs/collapsible/guided, "usable across all platforms"). All in `dashboard.js` `viewActive()` + `radioman.css`; **no backend/endpoint changes** — same panels, re-routed.
+- **Sub-tabs** (`activeTab` module var, persists across polls): **Targets** (live in-scope + "in range, not in scope" authorize tables), **Rogue AP** (control + loot), **Scope** (manual add + bulk + My Lab), **Audit**. Switching re-renders instantly from `activeCache` (no refetch). Handlers are id/class-guarded so only the mounted sub-view's controls bind.
+- **Guided stepper** strip (Enable → Scope a target → Act) with done/current/todo states — the "guided" feel without a rigid wizard.
+- **Engagement context** is a collapsible `<details>` (`.rm-acc`) rendered on *every* sub-tab, so `#rmEngAuth` is always in the DOM and one-tap authorize works from the Targets tab.
+- **Responsive/field**: `.rm-nav` becomes a horizontal scroll-strip ≤760px; field tables (`.rm-cards-sm` + `data-label` on `<td>`s) collapse to stacked cards ≤600px; touch-sized controls (min 40–44px).
+- **Global fix**: `renderMain()` now skips the 5s poll re-render while a form field in `#rmMain` has focus (was wiping in-progress typing on every poll — affected all form-heavy tabs, not just Active).
+- Verified by a stubbed-DOM Node harness that executes `viewActive()` for all four sub-tabs (no Flask locally). To re-run the dashboard on the laptop you still need `pip install flask flask-cors requests`.
+
 ### `setup/install_alfa.sh` (new) — external adapter driver (dual-model)
 Required for all active features — the internal Synaptics 43436s can't do AP mode or injection. **Auto-detects** the adapter via `lsusb` (or prompts / takes an explicit `ach`|`axml` arg) and installs the right driver:
 - **AWUS036ACH** → Realtek **RTL8812AU** → out-of-tree aircrack-ng DKMS module (survives kernel updates).
