@@ -180,13 +180,16 @@ body {
 /* ── Group sub-nav (second-level tabs under the header) ──────── */
 .rm-groupnav {
   display: none;
+  align-items: stretch;
   gap: 0.35rem;
+  min-height: 46px;                 /* explicit height — bar can't collapse */
   padding: 0 1.5rem;
   max-width: 1400px;
   margin: 0 auto;
   width: 100%;
   border-bottom: 1px solid var(--aap-line);
   overflow-x: auto;
+  overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
 }
@@ -194,13 +197,15 @@ body {
 .rm-groupnav::-webkit-scrollbar { display: none; }
 .rm-groupnav-btn {
   appearance: none;
+  display: inline-flex;
+  align-items: center;              /* center label in the 46px bar */
   border: none;
   background: transparent;
   color: var(--aap-muted);
   font: inherit;
   font-size: 0.85rem;
   font-weight: 600;
-  padding: 0.65rem 0.9rem;
+  padding: 0 0.9rem;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
   cursor: pointer;
@@ -212,7 +217,7 @@ body {
 
 @media (max-width: 600px) {
   .rm-groupnav { padding: 0 1rem; }
-  .rm-groupnav-btn { padding: 0.6rem 0.7rem; font-size: 0.82rem; }
+  .rm-groupnav-btn { padding: 0 0.7rem; font-size: 0.82rem; }
 }
 
 /* ── Hardware-required gate ──────────────────────────────────── */
